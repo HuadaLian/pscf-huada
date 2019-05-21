@@ -1,0 +1,33 @@
+
+Re-Generating Developer API Documentation
+-----------------------------------------
+
+If you modify the source files, you may wish to regenerate the html 
+api documentation. This documentation is extracted from the Fortran 
+source files by the GDoc.py python script, which is distributed as
+part of this package.  To generate html api documentation:
+
+ - From within the pscf/doc directory, enter::
+
+      > make devel-man
+
+ - At the prompt "Enter name of rc configuration file:", enter::
+
+      devel-man.rc
+
+   The resulting documentation will be created in subdirectory 
+   doc/devel-man, which will be created if it does not already exist. 
+
+ - To remove old html documentation and start over, enter::
+
+      > make clean
+
+   This will remove the entire doc/devel-man subdirectory.
+
+Re-Generating the User Manual
+-----------------------------
+
+   To generate a local copy of the user manual, enter::
+
+      > make user-man
+

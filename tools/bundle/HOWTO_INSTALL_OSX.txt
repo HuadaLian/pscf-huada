@@ -1,0 +1,43 @@
+To Install: 
+===========
+Drag and Drop "pscf_terminal.app" to your Applications Folder.
+
+To Run:
+=======
+Double click the "pscf_terminal.app"
+
+First Time Users: 
+=================
+The first time you attempt to run pscf_terminal, Mac OSX security settings will
+prevent the application from starting because it is from an "Unknown
+Developer". You will need to add an exception for this software. The following
+instructions are provided by Apple on
+https://support.apple.com/kb/PH18657?locale=en_US: 
+
+1. In the Finder, locate the app you want to open.
+    - Don’t use Launchpad to do this. Launchpad doesn’t allow you to access the
+      shortcut menu.
+
+2. Press the Control key, then click the app icon, then choose Open from the
+   shortcut menu.
+
+3. Click Open.
+
+The app is saved as an exception to your security settings, and you can open it
+in the future by double-clicking it just as you can any registered app.
+
+
+Install the Command Line Tools
+===============================
+Users who wish to run `pscf` from any Terminal (i.e., outside of the
+pscf_terminal.app) can append the following snippet to their $HOME/.bashrc:
+
+#### Enable PSCF CLI #####
+source /Applications/pscf_terminal.app/Contents/Resources/bin/pscf-env
+#### END ####
+
+New Terminal windows will then have the right environment to run `pscf` and 
+the python helper applications. Confirm the CLI functions properly by running
+"which pscf" in a fresh terminal. This should return:
+
+/Applications/pscf_terminal.app/Contents/Resources/pscf.app/Contents/MacOS/pscf

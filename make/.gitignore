@@ -1,0 +1,5 @@
+*.f
+*.o
+*.mod
+pscf
+config.mk

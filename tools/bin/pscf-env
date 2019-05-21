@@ -1,0 +1,44 @@
+#!/bin/bash 
+
+# Directory form which script is run
+run_from_dir=$( pwd )
+
+# Directory containing this script (i.e., bin directory in installation)
+script_dir=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+
+# Installation base directory (parent directory of script_dir)
+base_dir=$( cd "$( dirname "${script_dir}" )" && pwd )
+
+
+pathadd() {
+   if [ -d "$1" ] && [[ ":$PATH:" != *":$1:"* ]]; then
+      PATH="${PATH:+"$PATH:"}$1"
+   fi
+}
+
+# Add to unix command search path 
+pathadd $script_dir
+export PATH
+
+# Function to add dir to PYTHONPATH if not already present
+pythonpathadd() {
+   if [ -d "$1" ] && [[ ":$PYTHONPATH:" != *":$1:"* ]]; then
+      PYTHONPATH="${PYTHONPATH:+"$PYTHONPATH:"}$1"
+   fi
+}
+
+# Add to PYTHONPATH
+python_dir=$base_dir/lib/python2.7/site-packages
+pythonpathadd $python_dir
+export PYTHONPATH
+
+# Set search path for linking libraries
+PLATFORM=$( uname -s )
+if [ $PLATFORM == "Darwin" ]; then 
+    if [ -d $base_dir/pscf.app ]; then 
+        export PATH=$base_dir/pscf.app/Contents/MacOS:$PATH
+    fi
+    export DYLD_LIBRARY_PATH=$base_dir/lib:$DYLD_LIBRARY_PATH
+else 
+    export LD_LIBRARY_PATH=$base_dir/lib:$LD_LIBRARY_PATH
+fi
