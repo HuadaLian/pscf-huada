@@ -38,29 +38,57 @@ module step_mod
    private
 
    public :: init_step      ! allocate array needed by module
-   public :: make_propg     ! evaluate exp(-ds*b^2*nabla/6), exp(-ds*omega/2)
    !***
+
+   ! Generic interfaces 
+   public :: make_propg     ! Precalculated arrays for stepping
 
    public :: step_gaussian
    public :: step_wormlike_euler
    public :: step_wormlike_bdf3
+   public :: qw_decompose
+   public :: qw_sum 
    
-   ! Generic interfaces 
-   public :: set_initial              ! set initial condition of q(r,s+1) or q(r,u,s+1)          
    !Auxilliary array for Gaussian chain
+   real(long), allocatable    :: omega_local(:,:,:)
    real(long), allocatable    :: exp_omega1(:,:,:)
    real(long), allocatable    :: exp_omega2(:,:,:)
    real(long), allocatable    :: exp_ksq1(:,:,:)
    real(long), allocatable    :: exp_ksq2(:,:,:)
 
-   real(long), allocatable    :: q1(:,:,:)
-   real(long), allocatable    :: q2(:,:,:)
-   real(long), allocatable    :: qr(:,:,:)
+   real(long)   , allocatable    :: q1(:,:,:)
+   real(long)   , allocatable    :: q2(:,:,:)
+   real(long)   , allocatable    :: qr(:,:,:)
    complex(long), allocatable :: qk(:,:,:)
 
+   real(long)   , allocatable    :: qwj1(:,:,:,:) 
+   real(long)   , allocatable    :: qwj2(:,:,:,:) 
+   real(long)   , allocatable    :: qwjr(:,:,:,:) 
+
+   complex(long), allocatable :: qwjk(:,:,:,:)
+   real(long)   , allocatable    :: omegaqwr(:,:,:,:)
+   complex(long), allocatable :: omegaqwk(:,:,:,:)
+   real(long)                 :: ds_blk_local 
+   real(long)   , allocatable :: Pjr(:,:,:,:)
+   complex(long), allocatable :: Pjk(:,:,:,:) 
+   complex(long), allocatable :: Gjjqw(:,:,:) 
+   complex(long), allocatable :: Gklocal(:,:,:,:,:) 
+   complex(long), allocatable :: Gkhalfslocal(:,:,:,:,:) 
+   complex(long), allocatable :: Gkinvlocal(:,:,:,:,:) 
+
+
    !Auxilliary array for Wormlike chain
-   real(long), allocatable :: Yj(:,:)              ! 2D - real spherical harmonics on orientation grid u 
-   complex, allocatable :: Gk(:,:,:,:,:,:,:) ! 2D - vector function Gk(n1,n2,n3,j,j',i_blk,i_chain)    
+   real(long), allocatable :: glqf(:,:)           ! Gauss-Legendre quadrature (theta,phi,weight)               
+   real(long), allocatable :: glqr(:,:)           ! Gauss-Legendre quadrature (theta,phi,weight)
+
+   complex, allocatable :: Gkf(:,:,:,:,:,:)       ! For euler method 
+   complex, allocatable :: Gkr(:,:,:,:,:,:)       ! For euler method 
+
+   complex, allocatable :: Gkfhalfs(:,:,:,:,:,:)  ! For richardson extrapolation in euler method
+   complex, allocatable :: Gkrhalfs(:,:,:,:,:,:)  ! For richardson extrapolation in euler method
+
+   complex, allocatable :: Gkfinv(:,:,:,:,:,:) ! 2D - vector function Gk(n1,n2,n3,j,j',i_blk,i_chain)    
+   complex, allocatable :: Gkrinv(:,:,:,:,:,:) ! 2D - vector function Gk(n1,n2,n3,j,j',i_blk,i_chain)    
    !**
 
    !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -68,22 +96,19 @@ module step_mod
    !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
    
    !------------------------------------------------------------------
-   !****p step_mod/set_initial
+   !****p step_mod/make_propg
    ! FUNCTION
-   !    set_initial(qin, qout) 
+   !    make_propg
    !
    ! COMMENT
-   !    The initial condition may involve the change of rank of arrays. 
-   !    The rank of input qin and qout would choose appropriate method 
-   !    for setting initial condition. 
-   !     
-   !    worm_to_gauss : qin(:,:,:,:,:), qout(:,:,:) 
-   !    gauss_to_worm : qin(:,:,:), qout(:,:,:,:,:)  
+   !         
+   !    make_propg_gaussian : 
+   !    make_propg_wormlike : 
    ! SOURCE
    !------------------------------------------------------------------
-   interface set_initial 
-      module procedure worm_to_gauss        ! from wormlike block to gaussian block       
-      module procedure gauss_to_worm        ! from gaussian block to wormlike block     
+   interface make_propg 
+      module procedure make_propg_gaussian 
+      module procedure make_propg_wormlike 
    end interface 
    !***
 
@@ -108,8 +133,6 @@ contains
 
    integer :: error
 
-   integer     :: N_sph                         ! # of spherical harmonics
-
    integer     :: index_worm                    !  
    integer     :: i,k,l,m                        ! looping variables
 
@@ -121,7 +144,13 @@ contains
    real*8                :: z 
    real(long)            :: twopi 
    real(long)            :: mphi
-    
+
+
+   ! intensive work begins.
+   call omp_set_num_threads(omp_get_num_procs()/2)
+
+   ALLOCATE(omega_local(0:n(1)-1,0:n(2)-1,0:n(3)-1), STAT=error)
+   if (error /= 0) stop "omega_local allocation error"
 
    if (allocate_q) then 
       ALLOCATE(exp_omega1(0:n(1)-1,0:n(2)-1,0:n(3)-1), STAT=error)
@@ -147,63 +176,77 @@ contains
 
       ALLOCATE(qk(0:n(1)/2,0:n(2)-1,0:n(3)-1), STAT=error)
       if (error /= 0) stop "qk allocation error"
+
    endif
+
 
    ! if wormlike chain exists, allocate Gjj(k) and initialize it. 
    if (allocate_qw) then
-      N_sph = (lbar+1)**2 
- 
+
+      ALLOCATE(qwj1(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1), STAT=error)
+      if (error /= 0) stop "qwj1 allocation error"
+
+      ALLOCATE(qwj2(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1), STAT=error)
+      if (error /= 0) stop "qwj2 allocation error"
+
+      ALLOCATE(qwjr(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1), STAT=error)
+      if (error /= 0) stop "qwjr allocation error"
+
+      ALLOCATE(qwjk(0:n(1)/2,0:n(2)-1,0:n(3)-1,0:N_sph-1), STAT=error)
+      if (error /= 0) stop "qwjk allocation error"
+
+      ALLOCATE(omegaqwr(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1), STAT=error)
+      if (error /= 0) stop "omegaqwr allocation error"
+
+      ALLOCATE(omegaqwk(0:n(1)/2,0:n(2)-1,0:n(3)-1,0:N_sph-1), STAT=error)
+      if (error /= 0) stop "omegaqwk allocation error"
+
+      ALLOCATE(Pjr(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1), STAT=error)
+      if (error /= 0) stop "Pjr allocation error"
+
+      ALLOCATE(Pjk(0:n(1)/2,0:n(2)-1,0:n(3)-1,0:N_sph-1), STAT=error)
+      if (error /= 0) stop "Pjk allocation error"
+
+      ALLOCATE(Gklocal(0:n(1)/2,0:n(2)-1,0:n(3)-1,0:N_sph-1,0:N_sph-1), STAT=error)
+      if (error /= 0) stop "omega_local allocation error"
+
+      ALLOCATE(Gkinvlocal(0:n(1)/2,0:n(2)-1,0:n(3)-1,0:N_sph-1,0:N_sph-1), STAT=error)
+      if (error /= 0) stop "omega_local allocation error"
+
+      ALLOCATE(Gkhalfslocal(0:n(1)/2,0:n(2)-1,0:n(3)-1,0:N_sph-1,0:N_sph-1), STAT=error)
+      if (error /= 0) stop "omega_local allocation error"                
+
+      ALLOCATE(Gjjqw(0:n(1)/2,0:n(2)-1,0:n(3)-1), STAT=error)
+      if (error /= 0) stop "Gjjqw allocation error"
+
       ! mapping j -> (l,m)
-      ALLOCATE(j_index(1:2, 1:N_sph), STAT=error)
+      ALLOCATE(j_index(1:2, 0:N_sph-1), STAT=error)
       if (error /= 0) stop "j_index allocation error"
-      i = 1 
-      do l = 0, lbar
+      i = 0 
+      do l = 0, lmax
          do m = -l, l 
             j_index(:,i) = (/ l, m /)
             i = i + 1
          enddo
       enddo 
  
-      ALLOCATE(Yj(0:lebedev_order-1,1:N_sph), STAT=error)
-      if (error /= 0) stop "Yj allocation error"
-      ! initialization Yj(u,j) in accordance to lebedev_grid 
-      ALLOCATE(p(1:(lbar+1)*(lbar+2)/2), STAT=error)
-      if (error /= 0) stop "Legendre polynomials allocation error"
-      
-      twopi = 4.0_long*acos(0.0_long)
-      !$OMP PARALLEL 
-      do i = 0, lebedev_order-1 
-         z       = lebedev_tp_grid(1,i)
-         call PlmBar(p, lbar, cos(z)) 
-         do k = 1, N_sph
-            l = j_index(1,k)
-            m = j_index(2,k)
-            if (m .GE. 0) then 
-               index=PlmIndex(l,  m) 
-               mphi = cos(m*lebedev_tp_grid(2,i))/(sqrt(2.0_long*twopi)) 
-            else
-               index=PlmIndex(l, -m) 
-               mphi = sin(-m*lebedev_tp_grid(2,i))/(sqrt(2.0_long*twopi))
-            endif 
-
-            Yj(i,k) = p(index)*mphi/(sqrt(2.0_long*twopi))
-         enddo
-      enddo
-      !$OMP END PARALLEL
-
-      ALLOCATE(Gk(0:n(1)-1,0:n(2)-1,0:n(3)-1,1:N_sph,1:N_sph,N_worm_blk_max,N_chain), STAT=error)
-
+      ALLOCATE(Gkf(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1,0:N_sph-1,1:N_worm_blk_max), STAT=error)
+      if (error /= 0) stop "Gk allocation error"
+      ALLOCATE(Gkr(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1,0:N_sph-1,1:N_worm_blk_max), STAT=error)
       if (error /= 0) stop "Gk allocation error"
 
+      ALLOCATE(Gkfinv(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1,0:N_sph-1,1:N_worm_blk_max), STAT=error)
+      if (error /= 0) stop "Gkinv allocation error"
+      ALLOCATE(Gkrinv(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1,0:N_sph-1,1:N_worm_blk_max), STAT=error)
+      if (error /= 0) stop "Gkinv allocation error"
+
+      ALLOCATE(Gkfhalfs(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1,0:N_sph-1,1:N_worm_blk_max), STAT=error)
+      if (error /= 0) stop "Gkhalfs allocation error"
+      ALLOCATE(Gkrhalfs(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1,0:N_sph-1,1:N_worm_blk_max), STAT=error)
+      if (error /= 0) stop "Gkhalfs allocation error"
+
       ! initialization Gjj(k) for each wormlike block in all species 
-      do i = 1, N_chain
-         do k = 1, N_worm_block(i)
-            index_worm = Index_worm_block(k,i) 
-            if (block_type(index_worm,i)=='Wormlike') then 
-               call make_Gk_matrix(k, index_worm, i)   
-            endif
-         enddo
-      enddo
+      call make_Gk_matrix()   
 
    endif
       contains 
@@ -219,58 +262,202 @@ contains
          !   integer  i    - ith chain 
          ! SOURCE
          !----------------------------------------------------------------
-         subroutine make_Gk_matrix(k, index_worm,i)
-            integer,intent(IN) :: index_worm, k, i  
-            !*** 
-
-            integer       :: l,m                      ! (l,m) index of spherical harmonics           
-            integer       :: j,jp                     ! index of spherical harmonics             
+         subroutine make_Gk_matrix()
+            use unit_cell_mod, only : G_basis
+            integer       :: index_worm, k, i  
+            integer       :: l,m,lp,mp                ! (l,m) index of spherical harmonics           
+            integer       :: j,jp                     ! abbreviated index of spherical harmonics             
             integer       :: n1,n2,n3                 ! looping variables on k-grid
             integer       :: G(3), Gbz(3)             ! waves in FBZ
-            real(long)    :: rjj_element(3)                   ! element of Rjj 
+            real(long)    :: G_basis_local(3,3)       ! G_basis_copy
+            real(long)    :: G_bz_wave(3)
+
             real(long)    :: deltajj                  ! deltajj=1 when j=j'
             real(long)    :: h                        ! stepsize 
-            real(long)    :: blk_length               ! length of kth block in ith chain
             real(long)    :: monomer_size             ! kuhn monomer size
-            real(long)    :: twopi                    ! constant 2pi 
-            complex(long)       :: Gjjinv(1:N_sph,1:N_sph)  ! local variable to store inverse of Gjj(k)                    
+            complex(long) :: Gjjinv(0:N_sph-1,0:N_sph-1)  ! local variable to store inverse of Gjj(k)                    
 
-            twopi = 4.0_long * acos(0.0_long)  
-            blk_length = block_length(index_worm,i)
-            monomer_size =kuhn(block_monomer(index_worm,i)) 
-            h = chains(i)%block_ds(index_worm) 
+            real(long)    :: uint(3,0:lmax, 0:2*lmax) 
+            real(long)    :: Rjj(1:3,0:N_sph-1,0:N_sph-1), rjj_element(3) ! element of Rjj 
+            real(long)    :: twopi 
+            integer       :: u_to_lm(0:lmax,0:lmax)  
+            integer       :: lm_to_j(1:2,0:N_sph-1)  
+            integer       :: u,up  
+            real(long)    :: node_theta(0:lmax) ! node on theta axis
+            real(long)    :: node_phi(0:2*lmax) ! node on phi   axis
 
-            do n1=0,n(1)-1
-               G(1) = n1 
-               do n2=0,n(2)-1
-                  G(2) = n2 
-                  do n3=0,n(3)-1
-                     G(3) = n3
-                     !$OMP PARALLEL DO collapse(2) private(deltajj,Gbz,l,rjj_element)               
-                     do j = 1, N_sph
-                        do jp =1, N_sph
-                           if (j==jp) then
-                              deltajj=1.0_long
-                           else
-                              deltajj=0.0_long
-                           endif
-                           Gbz =G_to_bz(G)
-                           l = j_index(1,j)
-                           rjj_element= Rjj(:,j,jp)
 
-                           Gk(n1,n2,n3,j,jp,k,i) = cmplx(           &
-                              11.0_long/6.0_long*deltajj+h*l*(l+1.0_long)*(blk_length/monomer_size)*deltajj ,&  !real part 
-                              h*blk_length*twopi*dot_product(rjj_element,Gbz)               )  !imaginary part  
-
-                        enddo 
-                     enddo 
-                     !$OMP END PARALLEL DO
-
-                     Gjjinv = inverse(Gk(n1,n2,n3,1:N_sph,1:N_sph,k,i),N_sph) 
-                     Gk(n1,n2,n3,1:N_sph,1:N_sph,k,i) = Gjjinv  
-                 enddo 
-              enddo 
+            ! Construction of Rjj matrix  
+            twopi = acos(0.0_long)*4.0_long 
+             
+            ! Indices matrix between (l,m) to abbreviation j and n  
+            j = 0 
+            do l = 0, lmax
+            do m = -l, l
+               lm_to_j(:,j) = (/l,m/) 
+               j = j + 1 
             enddo 
+            enddo 
+
+            u = 0
+            u_to_lm = 0 
+            do l = 0, lmax 
+            do m = 0, l 
+               u_to_lm(l,m) = u 
+               u = u + 1
+            enddo
+            enddo
+               
+            do l = 0, lmax 
+               node_theta(l) = acos(zero(l)) 
+            enddo 
+            do m = 0, 2*lmax
+               node_phi(m) = m*twopi/(2*lmax+1) 
+            enddo 
+
+            ! Creat Rjj matrix element by element. 
+            do j  = 0, N_sph-1 
+               l  = lm_to_j(1,j) 
+               m  = lm_to_j(2,j) 
+            do jp = 0, N_sph-1 
+               lp = lm_to_j(1,jp) 
+               mp = lm_to_j(2,jp) 
+                
+               uint = 0.0_long 
+
+               u  = u_to_lm(l ,abs(m) ) 
+               up = u_to_lm(lp,abs(mp))
+               do n1 = 0, lmax  
+               do n2 = 0, 2*lmax 
+                  uint(:,n1,n2) = plx(n1,u)*plx(n1,up)*weight(n1) 
+                  if (m<0) then
+                     uint(:,n1,n2) = uint(:,n1,n2)*sin(abs(m)*node_phi(n2))
+                  elseif (m .GE. 0) then
+                     uint(:,n1,n2) = uint(:,n1,n2)*cos(m*node_phi(n2))
+                  endif
+
+                  if (mp<0) then
+                     uint(:,n1,n2) = uint(:,n1,n2)*sin(abs(mp)*node_phi(n2))
+                  elseif (mp .GE. 0) then
+                     uint(:,n1,n2) = uint(:,n1,n2)*cos(mp*node_phi(n2))
+                  endif
+
+                  uint(1,n1,n2) = uint(1,n1,n2)&
+                                *sin(node_theta(n1))*cos(node_phi(n2))
+                  uint(2,n1,n2) = uint(2,n1,n2)&
+                                *sin(node_theta(n1))*sin(node_phi(n2))
+                  uint(3,n1,n2) = uint(3,n1,n2)&
+                                *cos(node_theta(n1))
+               enddo 
+               enddo
+
+               Rjj(:,j,jp) = (/ sum(uint(1,:,:)),&
+                                sum(uint(2,:,:)),& 
+                                sum(uint(3,:,:)) /)
+               Rjj(:,j,jp) = Rjj(:,j,jp)*(twopi/(2*lmax+1))/(2*twopi)
+
+               do k = 1, 3
+                  if (abs(Rjj(k,j,jp)) < 10**(-10)) then 
+                     Rjj(k,j,jp) = 0.0_long 
+                  endif
+               enddo 
+               
+            enddo 
+            enddo 
+
+            G_basis_local = 0.0 
+            select case (dim) 
+            case(1)
+               G_basis_local(1,1) = G_basis(1,1)
+            case(2)
+               do n1=1,2
+               do n2=1,2
+                  G_basis_local(n1,n2) = G_basis(n1,n2) 
+               enddo
+               enddo
+            case(3) 
+               do n1=1,3
+               do n2=1,3
+                  G_basis_local(n1,n2) = G_basis(n1,n2) 
+               enddo
+               enddo
+            end select 
+
+            do i = 1,N_chain
+            do k = 1,N_block(i) 
+               if (block_type(k,i) =='Wormlike') then 
+                  monomer_size =  kuhn(block_monomer(k,i)) 
+                  h            =  chains(i)%block_ds(k) 
+                  index_worm   =  Index_worm_block(k,i) 
+
+                  do n1=0,n(1)-1
+                     G(1) = n1 
+                     do n2=0,n(2)-1
+                        G(2) = n2 
+                        do n3=0,n(3)-1
+                           G(3) = n3
+                           Gbz =G_to_bz(G)
+                           G_bz_wave = Gbz.dot.G_basis_local
+
+                           do j = 0, N_sph-1
+                              do jp =0, N_sph-1
+                                 if (j==jp) then
+                                    deltajj=1.0_long
+                                 else
+                                    deltajj=0.0_long
+                                 endif
+                                 l = j_index(1,j)
+                                 rjj_element= Rjj(:,j,jp)
+
+                                 Gkf(n1,n2,n3,j,jp,index_worm)      = cmplx(           &
+                                    11.0_long/6.0_long*deltajj+h*l*(l+1.0_long)*(chain_length(i)/monomer_size)*deltajj ,&  !real part 
+                                    -h*chain_length(i)*dot_product(rjj_element,G_bz_wave)    )  !imaginary part  
+                                 Gkr(n1,n2,n3,j,jp,index_worm)      = cmplx(           &
+                                    11.0_long/6.0_long*deltajj+h*l*(l+1.0_long)*(chain_length(i)/monomer_size)*deltajj ,&  !real part 
+                                    +h*chain_length(i)*dot_product(rjj_element,G_bz_wave)   )  !imaginary part  
+                              enddo 
+                           enddo 
+
+                           ! Gkinv for bdf3 
+                           Gkfinv(n1,n2,n3,0:N_sph-1,0:N_sph-1,index_worm) = &
+                                      inverse(Gkf(n1,n2,n3,0:N_sph-1,0:N_sph-1,index_worm),N_sph) 
+                           Gkrinv(n1,n2,n3,0:N_sph-1,0:N_sph-1,index_worm) = &
+                                      inverse(Gkr(n1,n2,n3,0:N_sph-1,0:N_sph-1,index_worm),N_sph) 
+
+                           ! Gk and Gkhalfs for euler method 
+                           do j = 0, N_sph-1
+                              do jp =0, N_sph-1
+                                 if (j==jp) then
+                                    deltajj=1.0_long
+                                 else
+                                    deltajj=0.0_long
+                                 endif
+                                 l = j_index(1,j)
+                                 rjj_element= Rjj(:,j,jp)
+
+                                 Gkf(n1,n2,n3,j,jp,index_worm)      = cmplx(                              &
+                                    deltajj-h*l*(l+1.0_long)*chain_length(i)/monomer_size*deltajj,     &           ! real part 
+                                    -h*chain_length(i)*dot_product(rjj_element,G_bz_wave) )  !imaginary part  
+                                 Gkr(n1,n2,n3,j,jp,index_worm)      = cmplx(                              &
+                                    deltajj-h*l*(l+1.0_long)*chain_length(i)/monomer_size*deltajj,     &           ! real part 
+                                    +h*chain_length(i)*dot_product(rjj_element,G_bz_wave)   )  !imaginary part  
+
+                                 Gkfhalfs(n1,n2,n3,j,jp,index_worm)      = cmplx(                             &
+                                    deltajj-h/2.0_long*l*(l+1.0_long)*chain_length(i)/monomer_size*deltajj,&                  !real part 
+                                    -h/2.0_long*chain_length(i)*dot_product(rjj_element,G_bz_wave)        )  !imaginary part
+
+                                 Gkrhalfs(n1,n2,n3,j,jp,index_worm)      = cmplx(                             &
+                                    deltajj-h/2.0_long*l*(l+1.0_long)*chain_length(i)/monomer_size*deltajj,&                  !real part 
+                                    +h/2.0_long*chain_length(i)*dot_product(rjj_element,G_bz_wave)        )  !imaginary part
+                              enddo 
+                           enddo 
+
+                       enddo 
+                    enddo 
+                  enddo 
+               endif
+               enddo
+               enddo
             end subroutine make_Gk_matrix 
                  
    end subroutine init_step
@@ -279,71 +466,227 @@ contains
 
 
    !----------------------------------------------------------------
-   !****p step_mod/make_propg
+   !****p step_mod/qw_decompose
    ! SUBROUTINE
-   !   make_propg(blk_type, ds,b,omega)
+   !   qw_decompose
    ! PURPOSE
-   !   For Gaussian: evaluate exp_ksq, exp_omega's
-   !   For Wormlike:  
+   !   expand the propagator of wormlike chain in spherical harmonics 
+   !   q(r,u,s) -> sum ( q_j(r,s) Ylm(u) )
    ! ARGUMENTS
-   !   real(long) ds     - step size
-   !   real(long) b      - statistical segment length
-   !   real(long) ksq    - k^2 on grid
-   !   real(long) omega  - omega field on grid
+   !   real q_in      -  input  q(r,u,s)
+   !   real q_out     -  output q(r,j,s)
    ! SOURCE
    !----------------------------------------------------------------
-   subroutine make_propg(blk_type,ds,b,omega)
+   subroutine qw_decompose(qw, qwj,dir) 
    implicit none
 
-   character(20), intent(IN) :: blk_type 
-   real(long)   , intent(IN) :: ds
-   real(long)   , intent(IN) :: b
-   real(long)   , intent(IN) :: omega(0:,0:,0:)
+   real(long), intent(IN)     :: qw(0:,0:,0:,0:,0:)
+   real(long), intent(OUT)    :: qwj(0:,0:,0:,0:)
+   integer,    intent(IN)     :: dir 
+
+   real(long)                 :: cilm(2,0:lmax,0:lmax)
+   real(long)                 :: cilm2(2,0:lmax, 0:lmax) 
+   real(long)                 :: eulerAngles(3)
+   real(long)                 :: dj(0:lmax, 0:lmax, 0:lmax) 
+   integer                    :: i,j,k,l,m,n   !looping variables 
    !***
 
-   !Auxilliary coef for Gaussian chain 
-   real(long)  :: lap_coeff, pot_coeff
+   cilm = 0.0_long 
 
-   select case(blk_type)
-   case ("Gaussian")
-      lap_coeff = ds * b**2 /  6.0_long
-      pot_coeff = ds / 2.0_long
+   do i=0,ngrid(1)-1
+   do j=0,ngrid(2)-1
+   do k=0,ngrid(3)-1
+      call SHExpandGLQ(cilm,lmax,qw(i,j,k,:,:),weight,plx, csphase=1) 
+!      if (dir == -1 ) then 
+!         eulerAngles = (/acos(0.0_long),-acos(0.0_long), acos(0.0_long) /)  ! transform (1,1,1) to (-1,-1,-1)                          
+!
+!         call djpi2(dj, lmax) 
+!         call SHRotateRealCoef(cilm2, cilm, lmax, eulerAngles,dj)    
+!      elseif (dir == 1) then
+!         cilm2 = cilm 
+!      else
+!         stop 'Integrating in a wrong direction.'
+!      endif 
 
-      exp_ksq1 = exp( - lap_coeff * ksq_grid )
-      exp_ksq2 = exp( - lap_coeff / 2.0_long * ksq_grid )
+      n = 0 
+      do l=0,lmax
+      do m=-l,l 
+         if (m < 0) then 
+            qwj(i,j,k,n) = cilm(2,l,-m)  
+         elseif (m .GE. 0) then 
+            qwj(i,j,k,n) = cilm(1,l,m) 
+         endif 
+         n = n + 1 
+      enddo 
+      enddo 
+   enddo 
+   enddo 
+   enddo 
 
-      exp_omega1 = exp( - pot_coeff * omega )
-      exp_omega2 = exp( - pot_coeff / 2.0_long * omega )
 
-   case ("Wormlike")
+   end subroutine qw_decompose
 
-   case default
-      write(6,*) 'Error: Invalid blk_type in make_propg'
-      call exit(0)
-   end select
 
-   end subroutine make_propg
-   !================================================================
+   !----------------------------------------------------------------
+   !****p step_mod/qw_sum
+   ! SUBROUTINE
+   !   qw_sum
+   ! PURPOSE
+   !   expand the propagator of wormlike chain in spherical harmonics 
+   !   q(r,u,s) -> sum ( q_j(r,s) Ylm(u) )
+   ! ARGUMENTS
+   !   real q_in      -  input  q(r,u,s)
+   !   real q_out     -  output q(r,j,s)
+   ! SOURCE
+   !----------------------------------------------------------------
+   subroutine qw_sum(qwj, qw,dir) 
+   implicit none
+
+   real(long), intent(IN)     :: qwj(0:,0:,0:,0:)
+   real(long), intent(OUT)    :: qw(0:,0:,0:,0:,0:)
+   integer   , intent(IN)     :: dir 
+
+   real(long)                 :: cilm(2,0:lmax,0:lmax)
+   real(long)                 :: cilm2(2,0:lmax,0:lmax) 
+   real(long)                 :: eulerAngles(3) 
+   real(long)                 :: dj(0:lmax,0:lmax,0:lmax)  
+   integer                    :: i,j,k,l,m,n   !looping variables 
+   !***
+
+   do i=0,ngrid(1)-1
+   do j=0,ngrid(2)-1
+   do k=0,ngrid(3)-1
+
+      cilm = 0.0_long 
+      do l=0,lmax
+      do m=-l,l
+         if (m < 0) then 
+            cilm(2,l,-m) = qwj(i,j,k,l**2+l+m) 
+         elseif (m .GE. 0) then
+            cilm(1,l, m) = qwj(i,j,k,l**2+l+m) 
+         endif 
+      enddo
+      enddo
+
+      if (dir == -1) then 
+         call djpi2(dj,lmax)  
+         call SHRotateRealCoef(cilm2, cilm, lmax, eulerAngles, dj) 
+      elseif (dir == 1) then
+         cilm2 = cilm
+      else
+         stop 'Integrating in a wrong direction.' 
+      endif
+
+      call MakeGridGLQ( qw(i,j,k,:,:), cilm2, lmax, plx, csphase=1)  
+
+   enddo
+   enddo
+   enddo
+
+   end subroutine qw_sum
 
    !----------------------------------------------------------------
    !****p step_mod/step_wormlike_euler
    ! SUBROUTINE
    !   step_wormlike_euler
    ! PURPOSE
-   !   Calculate first few steps in euler method.
+   !   Calculate first few steps in modified euler method.
    ! ARGUMENTS
    !   real q_in      -  input  q(r,s)
    !   real q_out     -  output q(r,s+-ds)
    !   fft_plan plan  -  see fft_mod for details
    ! SOURCE
    !----------------------------------------------------------------
-   subroutine step_wormlike_euler(q_in, q_out, plan) 
+   subroutine step_wormlike_euler(qwj_in, qwj_out, qwf_out,plan_many,dir) 
    implicit none
 
-   real(long), intent(IN)     :: q_in(0:,0:,0:)
-   real(long), intent(OUT)    :: q_out(0:,0:,0:)
-   type(fft_plan), intent(IN) :: plan
+   real(long), intent(IN)     :: qwj_in(0:,0:,0:,0:)  
+   real(long), intent(OUT)    :: qwj_out(0:,0:,0:,0:) 
+
+   real(long), intent(OUT)    :: qwf_out(0:,0:,0:,0:,0:) 
+
+   type(fft_plan_many), intent(IN) :: plan_many
+   integer,    intent(IN)     :: dir 
+
+   integer        :: i,j,k      
+   integer        :: l,p            ! looping variable 
+
+   real(long)     :: r_npoints
    !***
+
+   r_npoints = dble(plan_many%n(1)*plan_many%n(2)*plan_many%n(3))
+
+   ! half step size 
+   call fft(plan_many, qwj_in, qwjk) 
+   !$OMP PARALLEL
+   do l=0,N_sph-1
+      omegaqwr(:,:,:,l) = -1.0_long*ds_blk_local/2.0_long * omega_local * qwj_in(:,:,:,l)        ! (- or + )ds/2*omega(r)*qwj(r,s) 
+   enddo
+   !$OMP END PARALLEL 
+   call fft(plan_many, omegaqwr, omegaqwk) 
+   !$OMP PARALLEL DO private(Gjjqw)
+   do l = 0, N_sph -1 
+      Gjjqw = cmplx(0.0_long,0.0_long)                         
+      do p=0, N_sph-1
+         Gjjqw = Gjjqw + Gkhalfslocal(:,:,:,l,p)*qwjk(:,:,:,p)      ! sum_{j,jp} G_{j,jp}(k)*qw_jp(k)
+      enddo 
+      omegaqwk(:,:,:,l) = omegaqwk(:,:,:,l) + Gjjqw  
+   enddo 
+   !$OMP END PARALLEL DO
+   call ifft(plan_many, omegaqwk, qwj2) 
+   qwj2 = qwj2/r_npoints             
+
+   call fft(plan_many, qwj2, qwjk) 
+   ! half step size 
+   !$OMP PARALLEL
+   do l=0,N_sph-1
+      omegaqwr(:,:,:,l) = -1.0_long*ds_blk_local/2.0_long * omega_local * qwj2(:,:,:,l)
+   enddo
+   !$OMP END PARALLEL 
+   call fft(plan_many, omegaqwr, omegaqwk) 
+   !$OMP PARALLEL DO private(Gjjqw)
+   do l = 0, N_sph -1 
+      Gjjqw = cmplx(0.0_long,0.0_long)                         
+      do p=0, N_sph-1
+         Gjjqw = Gjjqw + Gkhalfslocal(:,:,:,l,p)*qwjk(:,:,:,p)      ! sum_{j,jp} G_{j,jp}(k)*qw_jp(k)
+      enddo 
+      omegaqwk(:,:,:,l) = omegaqwk(:,:,:,l) + Gjjqw  
+   enddo 
+   !$OMP END PARALLEL DO
+   call ifft(plan_many, omegaqwk, qwj2) 
+   qwj2 = qwj2/r_npoints             
+
+
+   ! full step size 
+   call fft(plan_many, qwj_in, qwjk) 
+   !$OMP PARALLEL
+   do l=0,N_sph-1
+      omegaqwr(:,:,:,l) = -1.0_long*ds_blk_local * omega_local * qwj_in(:,:,:,l)        ! ds/2*omega(r)*qwj(r,s) 
+   enddo
+   !$OMP END PARALLEL 
+
+   call fft(plan_many, omegaqwr, omegaqwk) 
+
+   !$OMP PARALLEL DO private(Gjjqw)
+   do l = 0, N_sph-1 
+      Gjjqw = cmplx(0.0_long,0.0_long)                         
+      do p=0, N_sph-1
+         Gjjqw = Gjjqw + Gklocal(:,:,:,l,p)*qwjk(:,:,:,p)      ! sum_{j,jp} G_{j,jp}(k)*qw_jp(k)
+      enddo 
+      omegaqwk(:,:,:,l) = omegaqwk(:,:,:,l) + Gjjqw  
+   enddo 
+   !$OMP END PARALLEL DO
+
+   call ifft(plan_many, omegaqwk, qwj1) 
+   qwj1 = qwj1/r_npoints             
+
+   !$OMP PARALLEL
+   do l=0,N_sph-1 
+      qwj_out(:,:,:,l) = (2.0_long*qwj2(:,:,:,l)-qwj1(:,:,:,l))/1.0_long
+   enddo 
+   !$OMP END PARALLEL
+
+   call qw_sum(qwj_out,qwf_out,dir)
 
    end subroutine step_wormlike_euler
 
@@ -362,13 +705,56 @@ contains
    !   fft_plan plan  -  see fft_mod for details
    ! SOURCE
    !----------------------------------------------------------------
-   subroutine step_wormlike_bdf3(q_in, q_out, plan) 
+   subroutine step_wormlike_bdf3(qwj3h_in,qwj2h_in,qwj1h_in,qwj_out,qwf_out,plan_many,dir) 
    implicit none
 
-   real(long), intent(IN)     :: q_in(0:,0:,0:)
-   real(long), intent(OUT)    :: q_out(0:,0:,0:)
-   type(fft_plan), intent(IN) :: plan
+   real(long), intent(IN)     :: qwj3h_in(0:,0:,0:,0:)  
+   real(long), intent(IN)     :: qwj2h_in(0:,0:,0:,0:)  
+   real(long), intent(IN)     :: qwj1h_in(0:,0:,0:,0:)  
+
+   real(long), intent(OUT)    :: qwj_out(0:,0:,0:,0:) 
+   real(long), intent(OUT)    :: qwf_out(0:,0:,0:,0:,0:) 
+
+   type(fft_plan_many), intent(IN) :: plan_many
+   integer,    intent(IN)     :: dir 
+
+   integer        :: i,j,k      
+   integer        :: l,p            ! looping variable 
+
+   real(long)     :: r_npoints
    !***
+
+   r_npoints = dble(plan_many%n(1)*plan_many%n(2)*plan_many%n(3))
+
+   !$OMP PARALLEL DO 
+   do l=0,N_sph-1
+      Pjr(:,:,:,l) = 3.0_long*qwj1h_in(:,:,:,l)&
+                    -3.0_long/2.0_long*qwj2h_in(:,:,:,l) &
+                    +1.0_long/3.0_long*qwj3h_in(:,:,:,l) & 
+                    -ds_blk_local*omega_local*(3.0_long*qwj1h_in(:,:,:,l)&
+                    -3.0_long*qwj2h_in(:,:,:,l) + qwj3h_in(:,:,:,l))
+   enddo 
+   !$OMP END PARALLEL DO 
+
+   call fft(plan_many, Pjr, Pjk) 
+
+   qwjk = cmplx(0.0_long, 0.0_long)
+   !$OMP PARALLEL DO COLLAPSE(4)
+   do i=0,ngrid(1)/2
+   do j=0,ngrid(2)-1
+   do k=0,ngrid(3)-1
+   do l=0,N_sph-1
+      qwjk(i,j,k,l) = Gkinvlocal(i,j,k,l,:).dot.Pjk(i,j,k,:)
+   enddo
+   enddo
+   enddo
+   enddo
+   !$OMP END PARALLEL DO 
+
+   call ifft(plan_many, qwjk, qwj_out) 
+   qwj_out = qwj_out /r_npoints  
+
+   call qw_sum(qwj_out,qwf_out,dir)
 
    end subroutine step_wormlike_bdf3
 
@@ -420,53 +806,88 @@ contains
    !================================================================
 
    !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-   ! Definitions of function set_initial
+   ! Definitions of function make_propg 
    !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
    !----------------------------------------------------------------
-   !****ip step_mod/worm_to_gauss 
+   !****p step_mod/make_propg_gaussian
    ! SUBROUTINE
-   !   worm_to_gauss 
+   !   make_propg(blk_type, ds,b,omega)
    ! PURPOSE
-   !   Set the initial condition of gaussian block
-   !   given the previous block is a wormlike block  
-   !   
+   !   For Gaussian: evaluate exp_ksq, exp_omega's
    ! ARGUMENTS
-   !   real q_in      -  input  q(r,u,s)
-   !   real q_out     -  output q(r,s+ds)
+   !   character(20) blk_type - type of block 
+   !   real(long)    ds       - step size
+   !   real(long)    b        - statistical segment length
+   !   real(long)    ksq      - k^2 on grid
+   !   real(long)    omega    - omega field on grid
    ! SOURCE
    !----------------------------------------------------------------
-   subroutine worm_to_gauss(q_in, q_out) 
+   subroutine make_propg_gaussian(ds,b,omega)
    implicit none
 
-   real(long), intent(IN)     :: q_in(0:,0:,0:,0:,0:)
-   real(long), intent(INOUT)    :: q_out(0:,0:,0:)
+   real(long)   , intent(IN) :: ds
+   real(long)   , intent(IN) :: b
+   real(long)   , intent(IN) :: omega(0:,0:,0:)
    !***
 
-   end subroutine worm_to_gauss 
+   !Auxilliary coef for Gaussian chain 
+   real(long)  :: lap_coeff, pot_coeff
+
+   lap_coeff = ds * b**2 /  6.0_long
+   pot_coeff = ds / 2.0_long
+
+   exp_ksq1 = exp( - lap_coeff * ksq_grid )
+   exp_ksq2 = exp( - lap_coeff / 2.0_long * ksq_grid )
+
+   exp_omega1 = exp( - pot_coeff * omega )
+   exp_omega2 = exp( - pot_coeff / 2.0_long * omega )
+   end subroutine make_propg_gaussian
    !================================================================
 
 
+
    !----------------------------------------------------------------
-   !****ip step_mod/gauss_to_worm 
+   !****p step_mod/make_propg_wormlike
    ! SUBROUTINE
-   !   gauss_to_worm 
+   !   make_propg(ds,b,omega, gk, gkhalfs)
    ! PURPOSE
-   !   Set the initial condition of wormlike block
-   !   given the previous block is a gaussian block  
-   !   
+   !   For Gaussian: evaluate exp_ksq, exp_omega's
    ! ARGUMENTS
-   !   real q_in      -  input  q(r,s)
-   !   real q_out     -  output q(r,u,s+ds)
+   !   real(long)    ds       - step size
+   !   real(long)    b        - statistical segment length
+   !   real(long)    ksq      - k^2 on grid
+   !   real(long)    omega    - omega field on grid
+   !   complex(long) Gk       - Gjjk array                         (optional)
+   !   complex(long) Gkhalfs  - Gjjk array with half step size     (optional)            
    ! SOURCE
    !----------------------------------------------------------------
-   subroutine gauss_to_worm(q_in, q_out) 
+   subroutine make_propg_wormlike(ds,b,omega,index_worm,dir)
    implicit none
 
-   real(long), intent(IN)     :: q_in(0:,0:,0:)
-   real(long), intent(INOUT)    :: q_out(0:,0:,0:,0:,0:)
+   real(long)   , intent(IN) :: ds
+   real(long)   , intent(IN) :: b
+   real(long)   , intent(IN) :: omega(0:,0:,0:)
+   integer      , intent(IN) :: index_worm
+   integer      , intent(IN) :: dir ! direction 
    !***
 
-   end subroutine gauss_to_worm 
+   ds_blk_local = ds  
+   omega_local  = omega
+   if (dir==1) then 
+      Gklocal     = Gkf(0:ngrid(1)/2,:,:,:,:,index_worm) 
+      Gkhalfslocal= Gkfhalfs(0:ngrid(1)/2,:,:,:,:,index_worm) 
+      Gkinvlocal  = Gkfinv(0:ngrid(1)/2,:,:,:,:,index_worm) 
+   elseif (dir== -1) then 
+      Gklocal     = Gkr(0:ngrid(1)/2,:,:,:,:,index_worm) 
+      Gkhalfslocal= Gkrhalfs(0:ngrid(1)/2,:,:,:,:,index_worm) 
+      Gkinvlocal  = Gkrinv(0:ngrid(1)/2,:,:,:,:,index_worm) 
+   else
+      stop 'Could not make propgator.'
+   endif
+
+
+
+   end subroutine make_propg_wormlike
    !================================================================
 
 end module step_mod

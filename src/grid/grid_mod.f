@@ -18,9 +18,9 @@
 !-----------------------------------------------------------------------
 module grid_mod
    use const_mod
+   use SHTOOLS 
    use io_mod
    use chemistry_mod
-   !use string_mod
    implicit none
 
    private
@@ -28,15 +28,16 @@ module grid_mod
    ! Public data structures
    public :: ngrid          ! dimensions ngrid(:)=(N1,N2,N3) of grid
    public :: chain_step     ! step size chain_step(:Nblock, :Nchain) 
-   public :: lbar           ! = max level of spherical harmonics l
-   public :: angular_grid   ! discretization of solid angle in lebedev grid                 
-   public :: lebedev_order  ! up to 131st order are available. 
-   public :: lebedev_tp_grid ! lebedev quadrature grid 
-   public :: lebedev_xyz_grid! lebedev quadrature gird
-   public :: Rjj            ! Auxilliary maxtrix for wormlike block 
+   public :: lmax           ! = max level of spherical harmonics l
+   public :: N_sph          ! (lmax+1)^2 
+
    public :: rho_grid       ! rho on r-grid   (r,N_monomer)
    public :: omega_grid     ! omega on r-grid (r,N_monomer)
    public :: ksq_grid       ! k**2 on k-grid 
+
+   public :: zero           ! nodes on cos(theta)
+   public :: weight         ! Gauss-Legendre weight 
+   public :: plx            ! Legendre values 
 
    ! Public procedures
    public :: input_grid
@@ -50,18 +51,21 @@ module grid_mod
    public :: G_to_bz
    public :: Greal_to_bz
    public :: norm
+   public :: GL_integrate 
 
    integer                  :: ngrid(3)
    real(long), ALLOCATABLE  :: chain_step(:,:) 
-   integer                  :: lbar 
-   character(20)            :: angular_grid
-   integer                  :: lebedev_order 
-   real(long), ALLOCATABLE  :: lebedev_tp_grid(:,:)   ! ( (theta,phi,weight),:order) 
-   real(long), ALLOCATABLE  :: lebedev_xyz_grid(:,:)   ! ( (x,y,z,weight),:order) 
-   real(long), ALLOCATABLE  :: Rjj(:,:,:)            ! Rjj(1:3,1:N_sph,1:N_sph) 
+   integer                  :: lmax 
+   integer                  :: N_sph 
+
    real(long), ALLOCATABLE  :: rho_grid(:,:,:,:)
    real(long), ALLOCATABLE  :: omega_grid(:,:,:,:)
    real(long), ALLOCATABLE  :: ksq_grid(:,:,:)
+
+   real(long), ALLOCATABLE  :: zero(:) 
+   real(long), ALLOCATABLE  :: weight(:) 
+   real(long), ALLOCATABLE  :: plx(:,:) 
+
    !***
 
    !---------------------------------------------------------------
@@ -100,73 +104,21 @@ contains
    ! SOURCE
    !---------------------------------------------------------------
    subroutine input_grid
-   !***
    use io_mod, only : input
 
+   ! grid of spatial space 
    call input(ngrid(:),dim,f='A')
    if (dim < 3) then
       ngrid(dim+1:3) = 1
    end if
 
-   call input(lbar,'lbar')
+   ! grid of orientational space 
+   call input(lmax,'lmax')
 
-   call input(angular_grid,'angular_grid') 
-
-   call set_lebedev()
-
+   N_sph = (lmax+1)**2 
+      
    end subroutine input_grid
    !==============================================================
-
-   !--------------------------------------------------------------   
-   !****p grid_mod/set_lebedev
-   ! SUBROUTINE
-   !   set_lebedev  
-   ! PURPOSE
-   !   Options: 
-   !      default   -    179
-   !      fine      -    302
-   !      superfine -    590 
-   !      ultrafine -   1730
-   ! SOURCE
-   !---------------------------------------------------------------
-
-   subroutine set_lebedev()
-      implicit none 
-      integer :: error
-
-      select case (angular_grid)
-      case('fine')
-         lebedev_order = 302 
-      case('superfine')
-         lebedev_order = 590
-      case('ultrafine') 
-         lebedev_order = 1730
-      case default 
-         lebedev_order = 179 
-      end select 
-   
-      ! lebedev grids 
-      allocate(lebedev_tp_grid(1:3,1:lebedev_order),STAT=error)
-      if (error /= 0) stop 'lebedev tp grid allocation error'
-   
-      allocate(lebedev_xyz_grid(1:4,1:lebedev_order),STAT=error)
-      if (error /= 0) stop 'lebedev xyz grid allocation error'
-   
-      call ld_by_order(lebedev_order,&
-                       lebedev_xyz_grid(1,1:lebedev_order),&
-                       lebedev_xyz_grid(2,1:lebedev_order),&
-                       lebedev_xyz_grid(3,1:lebedev_order),&
-                       lebedev_xyz_grid(4,1:lebedev_order) )  
-
-      call xyz_to_tp(lebedev_xyz_grid(1,1:lebedev_order),&
-                     lebedev_xyz_grid(2,1:lebedev_order),&
-                     lebedev_xyz_grid(3,1:lebedev_order),&
-                     lebedev_tp_grid( 2,1:lebedev_order),&
-                     lebedev_tp_grid( 1,1:lebedev_order) ) 
-   
-      lebedev_tp_grid(3,1:lebedev_order) = lebedev_xyz_grid(4,1:lebedev_order) 
-
-   end subroutine set_lebedev 
 
 
 
@@ -303,6 +255,17 @@ contains
 
    ALLOCATE(ksq_grid(0:(nx+1)/2,0:ny,0:nz),STAT=error)
    if (error /= 0) stop "rho_grid allocation error!"
+
+   ALLOCATE(zero(0:lmax),STAT=error)
+   if (error /= 0) stop "zero allocation error!"
+
+   ALLOCATE(weight(0:lmax),STAT=error)
+   if (error /= 0) stop "weight allocation error!"
+
+   ALLOCATE(plx(0:lmax,0:(lmax+1)*(lmax+2)/2-1),STAT=error)
+   if (error /= 0) stop "plx allocation error!"
+
+   call SHGLQ(lmax, zero, weight, plx, norm=1, csphase=1) 
 
    end subroutine allocate_grid
    !==============================================================
@@ -593,5 +556,37 @@ contains
    end function norm
    !=================================================================
 
+   !--------------------------------------------------------------
+   !****p  grid_mod/GL_integrate 
+   ! SUBROUTINE
+   !   GL_integrate(gridglq)
+   ! PURPOSE
+   !   Integrate on surface of sphere in 3D space 
+   !   by Gauss-Legendre quadrature.  
+   ! SOURCE
+   !--------------------------------------------------------------
+   function GL_integrate(gridglq,w) 
+   implicit none 
+   real(long)             :: GL_integrate
+   real(long),intent(IN)  :: gridglq(0:lmax, 0:2*lmax)  
+   real(long),intent(IN)  :: w(0:lmax) 
+   
+   !*** 
+   real(long)             :: sin_theta(0:lmax)  
+   integer                :: l,m !looping variables 
+
+   do l=0,lmax 
+      sin_theta(l) = sin((zero(l)+1.0)*acos(0.0_long))
+   enddo
+
+   GL_integrate = 0.0_long 
+
+   do m=0,2*lmax,1
+      GL_integrate = GL_integrate + sum(gridglq(:,m)*sin_theta*w)*acos(0.0_long)  
+   enddo 
+
+   GL_integrate = GL_integrate * acos(0.0_long)*4.0/(2*lmax+1) 
+
+   end function GL_integrate 
 
 end module grid_mod

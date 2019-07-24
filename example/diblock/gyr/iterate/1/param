@@ -1,0 +1,74 @@
+ format  1  0
+
+MONOMERS            
+N_monomer           
+                   2
+kuhn                
+    1.0000000000E+00    1.0000000000E+00
+
+CHAINS              
+N_chain             
+                   1
+N_block             
+                   2
+block_monomer       
+                   1                   2
+block_type 
+        'Gaussian'             'Gaussian'
+block_length        
+    2.0000000000E-01    8.0000000000E-01
+
+COMPOSITION         
+ensemble            
+                   0
+phi_chain           
+    1.0000000000E+00
+
+INTERACTION         
+interaction_type    
+               'chi'
+chi                 
+    2.0000000000E+01
+
+UNIT_CELL           
+dim                 
+                   3
+crystal_system      
+             'cubic'
+N_cell_param        
+                   1
+cell_param          
+    3.6753630037E+00
+
+DISCRETIZATION      
+ngrid               
+                  20                  20                  20
+lbar 
+                   8
+chain_step          
+    1.0000000000E-02         1.000000000E-02
+
+BASIS               
+group_name          
+                  '1'
+
+ITERATE             
+input_filename        
+          'in.omega'
+input_Rmatrix_filename
+         'rjjmatrix'
+output_prefix       
+              'out/'
+max_itr             
+               10000
+error_max           
+    1.0000000000E-08
+domain              
+                   T
+itr_algo            
+                'NR'
+N_cut               
+                  88
+
+FINISH              
+

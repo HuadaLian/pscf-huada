@@ -39,11 +39,13 @@
 
    ! Public variables
    public :: N_monomer, kuhn
-   public :: N_chain, N_block, N_worm_block, N_blk_max, Index_worm_block,N_worm_blk_max
+   public :: N_chain, N_block, N_blk_max, Index_worm_block,N_worm_blk_max
    public :: block_length, block_monomer, block_type, chain_length
    public :: N_solvent, solvent_monomer, solvent_size
    public :: ensemble, phi_chain, phi_solvent, mu_chain, mu_solvent
    public :: interaction_type, chi, chi_A, chi_B, temperature
+
+   public :: allocate_q, allocate_qw    
 
    ! Monomer properties
    integer    :: N_monomer = 0     ! # of monomer types
@@ -54,8 +56,7 @@
    integer       :: N_blk_max               ! maximum # of blocks in any species
    integer       :: N_worm_blk_max          ! maximum # of wormlike blocks in any species    
    integer       :: N_block(:)              ! (N_chain) # of blocks in species
-   integer       :: Index_worm_block(:,:)       ! index of wormlike block in species
-   integer       :: N_worm_block(:)         ! # of wormlike chain block in species
+   integer       :: Index_worm_block(:,:)   ! =  ( (i_blk, j_chain), sth)
    integer       :: block_monomer(:,:)      ! (N_blk_max,N_chain) monomer type 
    character(20) :: block_type(:,:)         ! # of chain types of polymer 
    real(long)    :: block_length(:,:)       ! (N_blk_max,N_chain) # monomers 
@@ -86,8 +87,11 @@
    !***
 
    allocatable :: kuhn, chi, chi_A, chi_B, solvent_monomer, solvent_size
-   allocatable :: N_block, N_worm_block, Index_worm_block, block_monomer, block_type, block_length, chain_length
+   allocatable :: N_block, Index_worm_block, block_monomer, block_type, block_length, chain_length
    allocatable :: phi_chain, mu_chain, phi_solvent, mu_solvent
+
+   logical       :: allocate_q = .FALSE.    ! By default 
+   logical       :: allocate_qw= .FALSE.    ! By default  
 
 !----------------------------------------------------------------------
 !****v* chemistry_mod/N_monomer
@@ -113,25 +117,16 @@
 !    integer      N_blk_max     = maximum # of blocks in any species
 !                               = max(N_block)
 !*** ------------------------------------------------------------------
-!****v* chemistry_mod/N_worm_blk_max
-! VARIABLE
-!    integer      N_worm_blk_max     = maximum # of wormlike blocks in any species
-!                                    = max(N_worm_block)
-!*** ------------------------------------------------------------------
 !****v* chemistry_mod/N_block
 ! VARIABLE
 !    integer      N_block(:)    = (N_chain) # of blocks in species
 !                 N_block(i)    = # of blocks in species i
 !*** ------------------------------------------------------------------
-!****v* chemistry_mod/N_worm_block
-! VARIABLE
-!    integer      N_worm_block(:)    = (N_chain) # of wormlike blocks in species
-!                 N_worm_block(i)    = # of wormlike blocks in species i
 !*** ------------------------------------------------------------------
 !****v* chemistry_mod/Index_worm_block
 ! VARIABLE
-!    integer      Index_worm_block(:,ith_chain)    = (N_chain) indices of wormlike block in species       
-!                 Index_worm_block(j,ith_chain)    = jth block in species i is wormlike 
+!    integer      Index_worm_block(1,sth_wormblock) = index of block      
+!                 Index_worm_block(2,sth_wormblock) = index of chain  
 !*** ------------------------------------------------------------------
 !****v* chemistry_mod/block_monomer
 ! VARIABLE
@@ -572,7 +567,6 @@ contains
          allocate(phi_chain(N_chain))
          allocate(mu_chain(N_chain)) 
          allocate(N_block(N_chain))
-         allocate(N_worm_block(N_chain))
          call input(N_block,N_chain,'N_block',s='C')
          N_blk_max = 0
          do i = 1, N_chain
@@ -608,25 +602,20 @@ contains
          enddo
          ! counting the # of wormlike block in species 
          ! store the indices of wormlike block                          
-         N_worm_block = 0
          Index_worm_block = 0 
-         do j = 1, N_chain
-            index_worm = 0
-            do i = 1, N_block(j)
-               if (block_type(i,j)=='Wormlike') then
-                  N_worm_block(j) = N_worm_block(j) + 1
-                  index_worm = index_worm + 1
-                  Index_worm_block(index_worm,j) = i 
-               elseif (block_type(i,j)=='Gaussian') then
-               endif
-            enddo
-         enddo
-         N_worm_blk_max = 0
+         index_worm = 0
          do i = 1, N_chain
-            if (N_worm_block(i) > N_worm_blk_max) then
-               N_worm_blk_max = N_worm_block(i)
-            endif
+            do j = 1, N_block(i)
+               if (block_type(j,i)=='Wormlike') then
+                  allocate_qw = .TRUE.
+                  index_worm = index_worm + 1
+                  Index_worm_block(j,i) = index_worm
+               elseif (block_type(j,i)=='Gaussian') then
+                  allocate_q = .TRUE.
+               endif
+            enddo 
          enddo
+         N_worm_blk_max = index_worm 
 
 
       endif
@@ -646,7 +635,6 @@ contains
                N_blk_max = N_block(i)
             endif
          enddo
-         allocate(N_worm_block(N_chain))
          allocate(Index_worm_block(N_blk_max,N_chain)) 
          allocate(block_monomer(N_blk_max,N_chain))
          allocate(block_type(N_blk_max,N_chain))
@@ -661,28 +649,20 @@ contains
             read(i_unit) block_length(1:N_block(j),j)
          enddo
 
-         ! counting # of wormlike block in species
-         N_worm_block = 0
          Index_worm_block = 0 
-         do j=1, N_chain
-            index_worm = 0 
-            do i=1, N_block(j)
-               if (block_type(i,j)=='Wormlike') then 
-                  N_worm_block(j) = N_worm_block(j)+1
-                  index_worm      = index_worm + 1
-                  Index_worm_block(index_worm,j) = i 
-               elseif (block_type(i,j)=='Gaussian') then 
-               endif
-            enddo
-         enddo
-         N_worm_blk_max = 0
+         index_worm = 0
          do i = 1, N_chain
-            if (N_worm_block(i) > N_worm_blk_max) then
-               N_worm_blk_max = N_worm_block(i)
-            endif
+            do j = 1, N_block(i)
+               if (block_type(j,i)=='Wormlike') then
+                  allocate_qw = .TRUE.
+                  index_worm = index_worm + 1
+                  Index_worm_block(j,i) = index_worm
+               elseif( block_type(j,i)=='Gaussian') then
+                  allocate_q = .TRUE. 
+               endif
+            enddo 
          enddo
-
-
+         N_worm_blk_max = index_worm 
       endif
 
    case default

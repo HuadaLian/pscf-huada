@@ -24,7 +24,6 @@ module scf_mod
    use fft_mod
    use grid_mod
    use grid_basis_mod 
-   use lebedev_mod
    use chain_mod
    use step_mod
    implicit none
@@ -51,11 +50,8 @@ module scf_mod
    ! public module variable 
    public:: plan              ! module variable, used in iterate_mod
    public:: chains 
-   !***
 
-   type(fft_plan)                             :: plan
-   type(chain_grid_type),allocatable          :: chains(:)
-   integer                                    :: extrap_order
+   !***
 
    !****v scf_mod/plan -------------------------------------------------
    ! VARIABLE
@@ -63,6 +59,36 @@ module scf_mod
    !                           (Public because its used in iterate_mod)
    !*** ----------------------------------------------------------------
 
+
+   type(fft_plan)                             :: plan
+
+   type(chain_grid_type),allocatable          :: chains(:)
+   integer                                    :: extrap_order
+
+   real(long),allocatable :: q0(:,:,:)      ! temp storage of 0th step for Gaussian block 
+   real(long),allocatable :: qr0(:,:,:)    ! temp storage 
+
+   real(long),allocatable :: qwj0(:,:,:,:)  ! temp storage of 0th step for wormlike block
+   real(long),allocatable :: qw0(:,:,:,:,:)   ! temp storage of 0th step for wormlike block          
+
+   !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+   ! Generic Interfaces
+   !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+   
+   !------------------------------------------------------------------
+   !****p scf_mod/rho_field
+   ! SUBROUTINE rho_field 
+   ! COMMENT
+   !
+   !  a) Taking propagator and evaluate the density of monomer 
+   !
+   ! SOURCE
+   !------------------------------------------------------------------
+   interface rho_field 
+      module procedure rho_field_gaussian
+      module procedure rho_field_wormlike 
+   end interface 
+   
 contains
 
    !--------------------------------------------------------------------
@@ -94,7 +120,24 @@ contains
    integer :: i, nblk, error
    integer :: nx,ny,nz    
    integer :: order 
-   real(long) :: x(:), y(:), z(:)
+
+
+   if (.NOT. allocated(q0) ) then 
+      allocate(q0(0:N_grids(1)-1,0:N_grids(2)-1,0:N_grids(3)-1),STAT=error)
+      if(error /= 0) STOP "q0 allocation error in scf_mod/density_startup"
+
+      allocate(qr0(0:N_grids(1)-1,0:N_grids(2)-1,0:N_grids(3)-1),STAT=error)
+      if(error /= 0) STOP "qr0 allocation error in scf_mod/density_startup"
+   endif
+
+
+   if (.NOT. allocated(qw0) ) then
+      allocate(qw0(0:N_grids(1)-1,0:N_grids(2)-1,0:N_grids(3)-1,0:lmax,0:2*lmax),STAT=error)
+      if(error /= 0) STOP "q0 allocation error in scf_mod/density_startup"
+      allocate(qwj0(0:N_grids(1)-1,0:N_grids(2)-1,0:N_grids(3)-1,0:N_sph-1),STAT=error)
+      if(error /= 0) STOP "q0 allocation error in scf_mod/density_startup"
+   endif
+
    if ( .NOT. update_chain ) then
       call create_fft_plan(N_grids,plan)
       if (N_chain > 0) then
@@ -159,6 +202,7 @@ contains
    real(long), intent(OUT)           :: rho(:,:)
    real(long), intent(OUT), optional :: qout(N_chain)
    real(long), intent(OUT), optional :: q_solvent(N_solvent)
+
    !***
    
    ! local variables
@@ -176,7 +220,10 @@ contains
    integer        :: i            ! dummy variable
    real(long)     :: Ns           ! number of solvent molecules in a reference volume  
    integer        :: info
-   
+   real*8         :: tb, te
+
+
+   !call cpu_time(tb) 
    allocate( kgrid(0:plan%n(1)/2, 0:plan%n(2)-1, 0:plan%n(3)-1), stat=info)
    if( info /= 0 ) stop "density/kgrid(:,:,:) allocation error"
   
@@ -323,27 +370,26 @@ contains
    real(long),intent(IN)                :: omega(0:,0:,0:,:)
    !***
 
-   integer   :: chain_end, i_blk
-   integer   :: istep, ibgn, iend
-   real(long):: ds, b
-   integer   :: i, j, k,l,m,monomer
-   integer   :: ix, iy, iz
-   integer   :: bgn, lst
-   character(20) :: blk_type
-   character(20) :: next_blk_type
-   real(long):: q0(0:ngrid(1)-1,0:ngrid(2)-1,0:ngrid(3)-1)      ! temp storage of 0th step for Gaussian block                
-   real(long):: qw0(0:ngrid(1)-1,0:ngrid(2)-1,0:ngrid(3)-1,0:lebedev_order-1) ! temp storage of 0th step for wormlike block          
-   real(long):: twopi 
+   integer       :: chain_end, i_blk
+   integer       :: istep, ibgn, iend
+   real(long)    :: ds, b
+   integer       :: i, j, k,l,m,monomer
+   integer       :: ix, iy, iz
+   integer       :: bgn, lst
+   character(20) :: blk_type,previous_blk_type,next_blk_type
+   real(long)    :: rho_uint   
+   real(long)    :: twopi 
 
    twopi = 4.0_long*acos(0.0_long)
+
    ! Calculate qf, by integratin forward from s=0
    ! Initialize propagator
-   next_blk_type = 'Empty' 
    select case (block_type(1,i_chain))
    case ('Gaussian')
       chain%qf(:,:,:,1) = 1.0_long 
    case ('Wormlike')
-      chain%qwf(:,:,:,:,1) = 1.0_long 
+      chain%qwf(:,:,:,:,:,1) = 1.0_long 
+      call qw_decompose(chain%qwf(:,:,:,:,:,1),chain%qwj(:,:,:,:,1),1)
    case default
       stop 'Invalid type of block' 
    end select
@@ -357,47 +403,72 @@ contains
       bgn      = chain%block_bgn_lst(1,i_blk)
       lst      = chain%block_bgn_lst(2,i_blk)
 
-      call make_propg(blk_type,ds, b, omega(:,:,:,monomer) )
-
       select case (blk_type)
       case('Gaussian')
+         call make_propg(ds, b, omega(:,:,:,monomer))
+
          do istep = bgn, lst-1 
             call step_gaussian(chain%qf(:,:,:,istep), &
-                               chain%qf(:,:,:,istep+1), plan)
+                               chain%qf(:,:,:,istep+1), chain%plan)
          end do
-         previous_blk_type = 'Gaussian'
+
+         if (i_blk < N_block(i_chain)) then
+            next_blk_type = block_type(i_blk+1,i_chain) 
+            if (next_blk_type=='Wormlike') then 
+               do l=0,lmax 
+               do m=0,2*lmax 
+                  chain%qwf(:,:,:,l,m,chain%block_bgn_lst(1,i_blk+1)) = chain%qf(:,:,:,lst) 
+               enddo 
+               enddo
+               call qw_decompose(chain%qwf(:,:,:,:,:,chain%block_bgn_lst(1,i_blk+1)),&
+                                 chain%qwj(:,:,:,:,chain%block_bgn_lst(1,i_blk+1)),1 )
+            else
+               chain%qf(:,:,:,chain%block_bgn_lst(1,i_blk+1)) = chain%qf(:,:,:,lst)
+            endif
+         endif
 
       case('Wormlike')
-      ! update first two steps by Euler method and Richardson extrapolation  
-      if (previous_blk_type=='Gaussian') then 
-         !$OMP DO 
-         do l=0,lebedev_order-1            
-         chain%qwf(:,:,:,l,bgn) = chain%qf(:,:,:,chain%block_bgn_lst(2,i_blk-1)
+         call make_propg(ds, b, omega(:,:,:,monomer),Index_worm_block(i_blk,i_chain),1)
+
+         if (lst-bgn < 4) stop "Step size is too large!"
+         ! update first and second steps by euler method 
+         do istep = 0,1
+            call step_wormlike_euler(chain%qwj(:,:,:,:,bgn+istep)  ,  & 
+                                     chain%qwj(:,:,:,:,bgn+istep+1),  &
+                                     chain%qwf(:,:,:,:,:,bgn+istep+1),  &
+                                     chain%plan_many,1)
+         end do 
+         bgn = bgn + 2
+
+         ! update the rest steps by BDF3 
+         do istep = bgn, lst-1
+            call step_wormlike_bdf3(chain%qwj(:,:,:,:,istep-2),  &
+                                    chain%qwj(:,:,:,:,istep-1),  &
+                                    chain%qwj(:,:,:,:,istep  ),  &
+                                    chain%qwj(:,:,:,:,istep+1),  &
+                                    chain%qwf(:,:,:,:,:,istep+1),  &
+                                    chain%plan_many,1) 
          enddo 
-         !$OMP END DO 
 
-      elseif (previous_blk_type=='Wormlike') then 
-            call step_gaussian(chain%qf(:,:,:,bgn-1), &
-                               chain%qf(:,:,:,bgn), plan)  
-            bgn = bgn + 1
-      endif
-
-      ! update first and second steps 
-      do istep = 0,1
-         call step_wormlike_euler(chain%qwf(:,:,:,:,bgn+istep)  , &
-                                  chain%qwf(:,:,:,:,bgn+istep+1), &
-                                  plan)  
-         bgn = bgn + 1
-      end do 
-
-      do istep = bgn, lst-1
-         call step_wormlike_bdf3(chain%qwf(:,:,:,:,istep-2)   ,&
-                                 chain%qwf(:,:,:,:,istep-1)   ,&
-                                 chain%qwf(:,:,:,:,istep  )   ,&
-                                 chain%qwf(:,:,:,:,istep+1)   ,&
-                                 plan) 
-      enddo 
-      previous_blk_type = 'Wormlike' 
+         if (i_blk < N_block(i_chain)) then
+            next_blk_type = block_type(i_blk+1,i_chain) 
+            if(next_blk_type=='Gaussian') then
+               !$OMP PARALLEL DO COLLAPSE(3)
+               do i=0,ngrid(1)-1
+               do j=0,ngrid(2)-1
+               do k=0,ngrid(3)-1
+               chain%qf(i,j,k,chain%block_bgn_lst(1,i_blk+1)) = & 
+                  GL_integrate(chain%qwf(i,j,k,:,:,lst),weight) /(2.0_long*twopi)
+               !integrate 
+               enddo 
+               enddo 
+               enddo 
+               !$OMP END PARALLEL DO 
+            else 
+               chain%qwj(:,:,:,:,chain%block_bgn_lst(1,i_blk+1)) = chain%qwj(:,:,:,:,lst) 
+               chain%qwf(:,:,:,:,:,chain%block_bgn_lst(1,i_blk+1)) = chain%qwf(:,:,:,:,:,lst) 
+            endif
+         endif
 
       case default
          stop 'Invalid type of block' 
@@ -406,12 +477,13 @@ contains
    end do
 
    ! Calculate qr, by integrating backward from s = chain_end
-   chain_end = chain%block_bgn_lst(2,N_block(i_chain))  
+   chain_end = chain%block_bgn_lst(2,N_block(i_chain)) 
    select case (block_type(N_block(i_chain),i_chain))
    case ('Gaussian')
       chain%qr(:,:,:,chain_end) = 1.0_long 
    case ('Wormlike')
       chain%qwr(:,:,:,:,:,chain_end) = 1.0_long 
+      call qw_decompose(chain%qwr(:,:,:,:,:,chain_end),chain%qwj(:,:,:,:,chain_end),-1) 
    case default
       stop 'Invalid type of block' 
    end select
@@ -423,92 +495,127 @@ contains
       b  = kuhn( monomer )
       bgn = chain%block_bgn_lst(1,i_blk) 
       lst = chain%block_bgn_lst(2,i_blk) 
-      call make_propg(blk_type,ds, b, omega(:,:,:,monomer) )
 
-      select case (block_type(i_blk,i_chain))
-      case ('Gaussian')
-         do istep = lst, bgn, -1
-            call step_gaussian(chain%qr(:,:,:,istep), &
-                      chain%qr(:,:,:,istep-1), plan)
+      select case (blk_type)
+      case('Gaussian')
+         call make_propg(ds, b, omega(:,:,:,monomer) )
+
+         ! initial condition
+         if (i_blk < N_block(i_chain)) then
+            previous_blk_type = block_type(i_blk+1,i_chain) 
+            if(previous_blk_type=='Gaussian') then
+               chain%qr(:,:,:,lst) = chain%qr(:,:,:,chain%block_bgn_lst(1,i_blk+1)) 
+            elseif (previous_blk_type=='Wormlike') then 
+               !$OMP PARALLEL DO COLLAPSE(3)
+               do i=0,ngrid(1)-1
+               do j=0,ngrid(2)-1
+               do k=0,ngrid(3)-1
+                  chain%qr(i,j,k,lst) = &
+                     GL_integrate(chain%qwr(i,j,k,:,:,chain%block_bgn_lst(1,i_blk+1)),weight)/(2.0_long*twopi) 
+               enddo
+               enddo
+               enddo
+               !$OMP END PARALLEL DO 
+            endif
+         endif
+         
+         ! integrating
+         do istep = lst, bgn+1, -1 
+            call step_gaussian(chain%qr(:,:,:,istep)  , &
+                               chain%qr(:,:,:,istep-1), chain%plan)
          end do
-      case ('Wormlike')
-         !!!
+
+      case('Wormlike')
+         call make_propg(ds, b, omega(:,:,:,monomer),Index_worm_block(i_blk,i_chain),-1)
+
+         if (lst-bgn < 4) stop "Step size is too large! Why?"
+         ! last step is 
+         if (i_blk < N_block(i_chain)) then
+            previous_blk_type = block_type(i_blk+1,i_chain) 
+            if(previous_blk_type=='Gaussian') then
+               !$OMP PARALLEL DO 
+               do l=0,lmax
+               do m=0,2*lmax 
+               chain%qwr(:,:,:,l,m,lst) = &
+                                chain%qr(:,:,:,chain%block_bgn_lst(1,i_blk+1))
+               enddo 
+               enddo
+               !$OMP END PARALLEL DO 
+               call qw_decompose(chain%qwr(:,:,:,:,:,lst),chain%qwj(:,:,:,:,lst),-1)
+            elseif (previous_blk_type=='Wormlike') then 
+               chain%qwr(:,:,:,:,:,lst) = chain%qwr(:,:,:,:,:,chain%block_bgn_lst(1,i_blk+1))
+               chain%qwj(:,:,:,:,lst) = chain%qwj(:,:,:,:,chain%block_bgn_lst(1,i_blk+1))
+
+            endif
+         endif
+
+         ! update first and second steps by euler method 
+         do istep = 0,1
+            call step_wormlike_euler(chain%qwj(:,:,:,:,lst-istep)  ,&
+                                     chain%qwj(:,:,:,:,lst-istep-1),&
+                                     chain%qwr(:,:,:,:,:,lst-istep-1),&
+                                     chain%plan_many,-1)
+         end do 
+         lst = lst -2 
+
+         ! update the rest steps by BDF3 
+         do istep = lst, bgn+1, -1
+            call step_wormlike_bdf3(chain%qwj(:,:,:,:,istep+2), &
+                                    chain%qwj(:,:,:,:,istep+1), &
+                                    chain%qwj(:,:,:,:,istep  ), &
+                                    chain%qwj(:,:,:,:,istep-1), &
+                                    chain%qwr(:,:,:,:,:,istep-1), &
+                                    chain%plan_many,-1) 
+         enddo 
+
+
       case default
          stop 'Invalid type of block' 
-      end select 
+      end select
+
    end do
 
    ! Calculate single chain partition function chain%bigQ
-   chain%bigQ = sum(chain%qf(:,:,:,chain_end)) &
+   chain_end = chain%block_bgn_lst(2,N_block(i_chain))
+   if (block_type(N_block(i_chain),i_chain) == 'Wormlike') then 
+      !$OMP PARALLEL DO COLLAPSE(3)
+      do i=0,ngrid(1)-1
+      do j=0,ngrid(2)-1
+      do k=0,ngrid(3)-1
+      q0(i,j,k) = GL_integrate(chain%qwf(i,j,k,:,:,chain_end),weight)
+      enddo
+      enddo
+      enddo
+      !$OMP END PARALLEL DO 
+      chain%bigQ = sum(q0) / ( 2.0_long*twopi*dble(size(q0)) ) 
+   elseif (block_type(N_block(i_chain),i_chain) == 'Gaussian') then 
+      ! pure gaussian chain  
+      chain%bigQ = sum(chain%qf(:,:,:,chain_end)) &
           / dble(size(chain%qf(:,:,:,chain_end)))
+   endif
 
    ! Calculate monomer concentration fields, using Simpson's rule
    ! to evaluate the integral \int ds qr(r,s)*qf(r,s)
    chain%rho = 0.0_long
    do i = 1, N_block(i_chain)
-      ! Chain ends: Add qf(r,ibgn)*qr(r,ibgn) & qf(r,iend)*qr(r,iend)
       ibgn=chain%block_bgn_lst(1,i)
       iend=chain%block_bgn_lst(2,i)
+      blk_type = block_type(i,i_chain)  
 
-!     chain%rho(:,:,:,i)=chain%qf(:,:,:,ibgn)*chain%qr(:,:,:,ibgn)
-      do iz=0,ngrid(3)-1
-      do iy=0,ngrid(2)-1
-      do ix=0,ngrid(1)-1
-        chain%rho(ix,iy,iz,i)=chain%qf(ix,iy,iz,ibgn)*chain%qr(ix,iy,iz,ibgn)
-      end do
-      end do
-      end do
-
-!     chain%rho(:,:,:,i)=chain%rho(:,:,:,i)+chain%qf(:,:,:,iend)*  &
-!                               chain%qr(:,:,:,iend)
-      do iz=0,ngrid(3)-1
-      do iy=0,ngrid(2)-1
-      do ix=0,ngrid(1)-1
-        chain%rho(ix,iy,iz,i)=chain%rho(ix,iy,iz,i) + &
-            chain%qf(ix,iy,iz,iend)*chain%qr(ix,iy,iz,iend)
-      end do
-      end do
-      end do
-
-      ! Odd indices: Sum values of qf(i)*qr(i)*4.0 with i odd
-      do j=ibgn+1,iend-1,2
-!        chain%rho(:,:,:,i)=chain%rho(:,:,:,i)+chain%qf(:,:,:,j)*  &
-!                          chain%qr(:,:,:,j)*4.0_long
-         do iz=0,ngrid(3)-1
-         do iy=0,ngrid(2)-1
-         do ix=0,ngrid(1)-1
-           chain%rho(ix,iy,iz,i)=chain%rho(ix,iy,iz,i) + &
-               chain%qf(ix,iy,iz,j)*chain%qr(ix,iy,iz,j)*4.0_long
-         end do
-         end do
-         end do
-
-      end do
-
-      ! Even indices: Sum values of qf(i)*qr(i)*2.0 with i even
-      do j=ibgn+2,iend-2,2
-!        chain%rho(:,:,:,i)=chain%rho(:,:,:,i)+chain%qf(:,:,:,j)*  &
-!                            chain%qr(:,:,:,j)*2.0_long
-         do iz=0,ngrid(3)-1
-         do iy=0,ngrid(2)-1
-         do ix=0,ngrid(1)-1
-           chain%rho(ix,iy,iz,i)=chain%rho(ix,iy,iz,i) + &
-               chain%qf(ix,iy,iz,j)*chain%qr(ix,iy,iz,j)*2.0_long
-         end do
-         end do
-         end do
-
-      end do
-
-      ! Multiply sum by ds/3
-      chain%rho(:,:,:,i)=chain%rho(:,:,:,i)*chain%block_ds(i)/3.0_long  
+      select case (blk_type)
+      case ('Gaussian') 
+         call rho_field(chain%block_ds(i), chain%qf(:,:,:,ibgn:iend),chain%qr(:,:,:,ibgn:iend),chain%rho(:,:,:,i))               
+      case ('Wormlike')
+         call rho_field(chain%block_ds(i), chain%qwf(:,:,:,:,:,ibgn:iend),chain%qwr(:,:,:,:,:,ibgn:iend),chain%rho(:,:,:,i))      
+      case default
+         stop 'Invalid type of block'
+      end select 
    end do
 
    chain%rho=chain%rho/chain_length(i_chain)/chain%bigQ
 
    end subroutine chain_density
    !====================================================================
-
 
    !--------------------------------------------------------------------
    !****p scf_mod/scf_stress
@@ -557,6 +664,7 @@ contains
    integer         :: sp_index            ! species index
    integer         :: ibgn,iend
    integer         :: info
+   integer         :: j,k,l
 
    allocate( kgrid(0:ngrid(1)/2, 0:ngrid(2)-1, 0:ngrid(3)-1), stat=info )
    if ( info /= 0 ) stop "scf_mod/scf_stress/kgrid(:,:,:) allocation error"
@@ -586,17 +694,44 @@ contains
             iend = chains(sp_index)%block_bgn_lst(2,alpha)
 
          do i = ibgn, iend
+            if (block_type(alpha, sp_index)=='Gaussian') then
+               q0  = chains(sp_index)%qf(:,:,:,i) 
+               qr0 = chains(sp_index)%qr(:,:,:,i) 
+            elseif (block_type(alpha, sp_index) =='Wormlike') then
+
+               do j=0,ngrid(1)-1
+               do k=0,ngrid(2)-1
+               do l=0,ngrid(3)-1
+               q0(j,k,l) = GL_integrate(chains(sp_index)%qwf(j,k,l,:,:,i), weight) 
+               enddo
+               enddo
+               enddo
+               q0 = q0 / (8.0_long*acos(0.0_long)) 
+
+               do j=0,ngrid(1)-1
+               do k=0,ngrid(2)-1
+               do l=0,ngrid(3)-1
+               qr0(j,k,l) = GL_integrate(chains(sp_index)%qwr(j,k,l,:,:,i), weight) 
+               enddo
+               enddo
+               enddo
+               qr0 = qr0 / (8.0_long*acos(0.0_long)) 
+
+            else
+               stop 'Invalid type of block in scf_stress.'
+            endif 
+
             ! rgrid=dcmplx( chains(sp_index)%qf(:,:,:,i), 0.0_long)
-            call fft(plan, chains(sp_index)%qf(:,:,:,i), kgrid )
+            call fft(plan, q0, kgrid )
             call kgrid_to_basis( kgrid, qf_basis )
 
             ! rgrid=dcmplx( chains(sp_index)%qr(:,:,:,i), 0.0_long)
-            call fft(plan, chains(sp_index)%qr(:,:,:,i), kgrid )
+            call fft(plan, qr0, kgrid )
             call kgrid_to_basis( kgrid, qr_basis )
 
             ds = ds0
             if ( i/= ibgn .and. i/= iend) then
-               if (modulo(i,2) == 0) then
+               if (modulo(i-ibgn+1,2) == 0) then
                   ds = 4.0_long * ds
                else
                   ds = 2.0_long * ds
@@ -1019,5 +1154,189 @@ contains
    end do
    end function free_energy_FH
    !=============================================================
+
+   !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+   ! Definitions of rho_field
+   !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+   !--------------------------------------------------------------------
+   !****p scf_mod/rho_field
+   ! FUNCTION
+   !    rho_field(ds, qf_in, qr_in, rho_out )
+   !
+   ! RETURN 
+   !    real(long) array of dimension(x,y,z,nblk) containing 
+   !    the density of ith monomer  
+   ! ARGUMENTS
+   !       ds  : step size in s 
+   !    qf_in  : forward propagator 
+   !    qr_in  : backward propagator 
+   !    rho_field: density of ith monomer  
+   ! COMMENT
+   !     
+   ! SOURCE
+   !--------------------------------------------------------------------
+   subroutine rho_field_gaussian(ds, qf_in,qr_in,rho_out)
+   implicit none 
+   real(long), intent(IN) :: ds 
+   real(long), intent(IN) :: qf_in(0:,0:,0:,1:) 
+   real(long), intent(IN) :: qr_in(0:,0:,0:,1:) 
+   real(long), intent(OUT):: rho_out(0:,0:,0:) 
+
+   integer      :: iz,iy,ix,j   !looping variables 
+   integer      :: ibgn, iend   !index of the first and last segment
+   !*** 
+ 
+   ibgn = 1                 ! first index 
+   iend = size(qf_in,4)     ! last  index 
+
+   rho_out = 0.0_long 
+   !$OMP PARALLEL DO COLLAPSE(3)
+   do iz=0,ngrid(3)-1
+   do iy=0,ngrid(2)-1
+   do ix=0,ngrid(1)-1
+      rho_out(ix,iy,iz)=qf_in(ix,iy,iz,ibgn)*qr_in(ix,iy,iz,ibgn)
+   end do
+   end do
+   end do
+   !$OMP END PARALLEL DO 
+
+   !$OMP PARALLEL DO COLLAPSE(3)
+   do iz=0,ngrid(3)-1
+   do iy=0,ngrid(2)-1
+   do ix=0,ngrid(1)-1
+      rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
+                        qf_in(ix,iy,iz,iend)*qr_in(ix,iy,iz,iend)
+   end do
+   end do
+   end do
+   !$OMP END PARALLEL DO 
+
+   !$OMP PARALLEL DO COLLAPSE(4)
+   ! Odd indices: Sum values of qf(i)*qr(i)*4.0 with i odd
+   do j=ibgn+1,iend-1,2
+      do iz=0,ngrid(3)-1
+      do iy=0,ngrid(2)-1
+      do ix=0,ngrid(1)-1
+         rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
+                           qf_in(ix,iy,iz,j)*qr_in(ix,iy,iz,j)*4.0_long
+      end do
+      end do
+      end do
+   end do
+   !$OMP END PARALLEL DO 
+
+   !$OMP PARALLEL DO COLLAPSE(4)
+   ! Even indices: Sum values of qf(i)*qr(i)*2.0 with i even
+   do j=ibgn+2,iend-2,2
+      do iz=0,ngrid(3)-1
+      do iy=0,ngrid(2)-1
+      do ix=0,ngrid(1)-1
+        rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
+                           qf_in(ix,iy,iz,j)*qr_in(ix,iy,iz,j)*2.0_long
+      end do
+      end do
+      end do
+   end do
+   !$OMP END PARALLEL DO 
+
+   ! Multiply sum by ds/3
+   rho_out=rho_out*ds/3.0_long  
+   end subroutine rho_field_gaussian 
+
+   !--------------------------------------------------------------------
+   !****p scf_mod/rho_field_wormlike
+   ! FUNCTION
+   !    rho_field(ds, qf_in, qr_in, rho_out )
+   !
+   ! RETURN 
+   !    real(long) array of dimension(x,y,z,nblk) containing 
+   !    the density of ith monomer  
+   ! ARGUMENTS
+   !       ds  : step size in s 
+   !    qf_in  : forward propagator 
+   !    qr_in  : backward propagator 
+   !    rho_field: density of ith monomer  
+   ! COMMENT
+   !     
+   ! SOURCE
+   !--------------------------------------------------------------------
+
+   subroutine rho_field_wormlike(ds,qwf_in,qwr_in,rho_out)
+   implicit none 
+   real(long), intent(IN) :: ds 
+   real(long), intent(IN) :: qwf_in(0:,0:,0:,0:,0:,1:) 
+   real(long), intent(IN) :: qwr_in(0:,0:,0:,0:,0:,1:) 
+   real(long), intent(OUT):: rho_out(0:,0:,0:) 
+
+   integer      :: iz,iy,ix,j,l,m !looping variables 
+   integer      :: ibgn, iend !index of the first and last segment
+   real(long)   :: fourpi
+   real(long)   :: qwfr_product(0:lmax,0:2*lmax) 
+   !*** 
+
+   fourpi = 2.0_long*4.0_long*acos(0.0_long) 
+
+   ibgn = 1                  ! first index 
+   iend = size(qwf_in,6)     ! last  index 
+
+   rho_out = 0.0_long 
+
+   do iz=0,ngrid(3)-1
+   do iy=0,ngrid(2)-1
+   do ix=0,ngrid(1)-1
+   qwfr_product = qwf_in(ix,iy,iz,:,:,ibgn)*qwr_in(ix,iy,iz,:,:,ibgn)
+   rho_out(ix,iy,iz)=GL_integrate(qwfr_product,weight) 
+   end do
+   end do
+   end do
+
+   !$OMP PARALLEL DO collapse(3) private(qwfr_product)
+   do iz=0,ngrid(3)-1
+   do iy=0,ngrid(2)-1
+   do ix=0,ngrid(1)-1
+   qwfr_product = qwf_in(ix,iy,iz,:,:,iend)*qwr_in(ix,iy,iz,:,:,iend)
+   rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
+                        GL_integrate(qwfr_product,weight) 
+   end do
+   end do
+   end do
+   !$OMP END PARALLEL DO 
+
+   !$OMP PARALLEL DO collapse(4) private(qwfr_product)
+   ! Odd indices: Sum values of qf(i)*qr(i)*4.0 with i odd
+   do j=ibgn+1,iend-1,2
+      do iz=0,ngrid(3)-1
+      do iy=0,ngrid(2)-1
+      do ix=0,ngrid(1)-1
+      qwfr_product = qwf_in(ix,iy,iz,:,:,j)*qwr_in(ix,iy,iz,:,:,j)
+      rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
+                           GL_integrate(qwfr_product,weight)*4.0_long
+      end do
+      end do
+      end do
+   end do
+   !$OMP END PARALLEL DO 
+
+   !$OMP PARALLEL DO collapse(4) private(qwfr_product)
+   ! Even indices: Sum values of qf(i)*qr(i)*2.0 with i even
+   do j=ibgn+2,iend-2,2
+      do iz=0,ngrid(3)-1
+      do iy=0,ngrid(2)-1
+      do ix=0,ngrid(1)-1
+      qwfr_product = qwf_in(ix,iy,iz,:,:,j)*qwr_in(ix,iy,iz,:,:,j)
+      rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
+                           GL_integrate(qwfr_product,weight)*2.0_long
+      end do
+      end do
+      end do
+   end do
+   !$OMP END PARALLEL DO 
+
+   ! Multiply sum by ds/3
+   rho_out=rho_out*ds/3.0_long/fourpi
+
+   end subroutine rho_field_wormlike 
+
 
 end module scf_mod

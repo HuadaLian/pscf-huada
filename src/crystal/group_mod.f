@@ -176,9 +176,11 @@ module group_mod
    interface operator(.dot.)
       module procedure ivec_dot_ivec  ! integer 
       module procedure vec_dot_vec    ! real    
+      module procedure cvec_dot_cvec    ! complex complex    
       module procedure ivec_dot_vec   ! real   
       module procedure vec_dot_ivec   ! real    
-      module procedure mat_dot_vec    ! real(3) 
+      module procedure mat_dot_vec    ! real(:) 
+      module procedure mat_dot_ivec    ! real(:) 
       module procedure ivec_dot_mat   ! real(3) 
       module procedure vec_dot_mat    ! real(3) 
       module procedure mat_dot_mat    ! real(3,3) 
@@ -497,15 +499,46 @@ contains
    ! SOURCE
    !------------------------------------------------------------------
    real(long) function vec_dot_vec(v1,v2)
-   real(long),intent(IN), dimension(:) :: v1, v2
+   real(long),intent(IN), dimension(1:) :: v1, v2
    !***
-   integer     ::i
+   integer     ::i,d,l
+
+   d = size(v1)
+   l = size(v2)
+   if (d .NE.l) stop 'dimension of complex vecotrs does not match.' 
+
    vec_dot_vec = 0.0_long
-   do i=1, dim
+   do i=1,d 
       vec_dot_vec = vec_dot_vec + v1(i)*v2(i)
    enddo
    end function vec_dot_vec
    !===================================================================
+
+   !------------------------------------------------------------------
+   !****ip group_mod/vec_dot_vec
+   !  FUNCTION
+   !      complex(long) vec_dot_vec(v1,v2)
+   !  RETURN
+   !      Dot product of 2 complex vectors
+   ! SOURCE
+   !------------------------------------------------------------------
+   complex(long) function cvec_dot_cvec(v1,v2)
+   complex(long),intent(IN), dimension(1:) :: v1, v2
+   !***
+   integer     ::i
+   integer     ::j,k 
+   j = size(v1) 
+   k = size(v2) 
+   if (j .NE.k) stop 'dimension of complex vecotrs does not match.' 
+
+   cvec_dot_cvec = cmplx(0.0_long,0.0_long) 
+   do i=1, j
+      cvec_dot_cvec = cvec_dot_cvec + v1(i)*v2(i)
+   enddo
+   end function cvec_dot_cvec
+   !===================================================================
+
+
 
 
    !------------------------------------------------------------------
@@ -544,32 +577,76 @@ contains
    vec_dot_ivec = ivec_dot_vec(v2,v1)
    end function vec_dot_ivec
    !===================================================================
-
-
    !------------------------------------------------------------------
    !****ip group_mod/mat_dot_vec
    ! FUNCTION
    !   real(long) mat_dot_vec(m,v)
    ! RETURN
    !   Dot product of real matrix m .dot. real column vector v
-   !   Returns real array mat_dot_vec(3)
+   !   Returns real array mat_dot_vec(:)
    ! SOURCE
    !------------------------------------------------------------------
-   function mat_dot_vec(m,v)
-   real(long)             :: mat_dot_vec(3)
+   function mat_dot_vec(m,v)  
+   real(long),allocatable :: mat_dot_vec(:)
    real(long),intent(IN)  :: v(:)
    real(long),intent(IN)  :: m(:,:)
    !***
    integer     ::i,j
+   integer     ::d1,d2,v1
+   integer     ::error 
+   d1 = size(m,1) 
+   d2 = size(m,2) 
+   v1 = size(v) 
+   if (d2 .NE. v1)  stop 'dimension of matrix and vector does not match.' 
+
+   ALLOCATE(mat_dot_vec(1:d1), STAT=error) 
+   if (error /= 0) stop 'allcation issue in mat_dot_vec' 
+
    mat_dot_vec = 0.0_long
-   do i=1, dim
-      do j=1, dim
+
+   do i=1, d1
+      do j=1, d2 
          mat_dot_vec(i) = mat_dot_vec(i) + m(i,j)*v(j)
       enddo
    enddo
    end function mat_dot_vec
    !===================================================================
 
+
+   !------------------------------------------------------------------
+   !****ip group_mod/mat_dot_ivec
+   ! FUNCTION
+   !   real(long) mat_dot_ivec(m,v)
+   ! RETURN
+   !   Dot product of real matrix m .dot. real column vector v
+   !   Returns real array mat_dot_ivec(:)
+   ! SOURCE
+   !------------------------------------------------------------------
+   function mat_dot_ivec(m,v)  
+   real(long),allocatable :: mat_dot_ivec(:)
+   integer   ,intent(IN)  :: v(:)
+   real(long),intent(IN)  :: m(:,:)
+   !***
+   integer     ::i,j
+   integer     ::d1,d2,v1
+   integer     ::error 
+   d1 = size(m,1) 
+   d2 = size(m,2) 
+   v1 = size(v) 
+   if (d2 .NE. v1)  stop 'dimension of matrix and vector does not match.' 
+
+   ALLOCATE(mat_dot_ivec(1:d1), STAT=error) 
+   if (error /= 0) stop 'allcation issue in mat_dot_ivec' 
+
+   mat_dot_ivec = 0.0_long
+
+   do i=1, d1
+      do j=1, d2 
+         mat_dot_ivec(i) = mat_dot_ivec(i) + m(i,j)*v(j)
+      enddo
+   enddo
+   end function mat_dot_ivec
+   !===================================================================
 
    !------------------------------------------------------------------
    !****ip group_mod/vec_dot_mat

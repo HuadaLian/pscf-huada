@@ -26,14 +26,14 @@ pscf:	pscf.o\
 	const_mod.o string_mod.o io_mod.o version_mod.o field_io_mod.o\
 	unit_cell_mod.o group_mod.o space_groups_mod.o basis_mod.o\
 	chemistry_mod.o scf_mod.o iterate_mod.o sweep_mod.o\
-	step_mod.o grid_mod.o chain_mod.o $(FFT_FILE).o grid_basis_mod.o\
+	step_mod.o kronrod_mod.o grid_mod.o chain_mod.o $(FFT_FILE).o grid_basis_mod.o\
 	response_pd_mod.o spinodal_mod.o\
 	response_mod.o response_step_mod.o extrapolate_mod.o
 	$(F90) $(FOPENMP) $(LINK) -o pscf pscf.o \
 	const_mod.o string_mod.o io_mod.o version_mod.o field_io_mod.o \
 	unit_cell_mod.o group_mod.o space_groups_mod.o basis_mod.o \
 	chemistry_mod.o scf_mod.o iterate_mod.o sweep_mod.o \
-	step_mod.o grid_mod.o chain_mod.o $(FFT_FILE).o grid_basis_mod.o \
+	step_mod.o kronrod_mod.o grid_mod.o chain_mod.o $(FFT_FILE).o grid_basis_mod.o \
 	response_pd_mod.o spinodal_mod.o \
 	response_mod.o response_step_mod.o extrapolate_mod.o \
 	$(LIBDIRS) $(SHTOOLSLIB) $(FFTWLIB) $(LAPACKLIB) -lm
@@ -86,12 +86,15 @@ field_io_mod.o: $(SRC)/io/field_io_mod.f const_mod.o io_mod.o\
 	$(F90) $(FAST) -c $(SRC)/io/field_io_mod.f
 
 # grid directory
+kronrod_mod.o: $(SRC)/grid/kronrod_mod.f
+	$(F90) $(FAST) -c $(SRC)/grid/kronrod_mod.f
+
 grid_mod.o: $(SRC)/grid/grid_mod.f const_mod.o\
-	group_mod.o unit_cell_mod.o
-	$(F90) $(FAST) -c $(SRC)/grid/grid_mod.f
+	group_mod.o unit_cell_mod.o kronrod_mod.o 
+	$(F90) $(FAST) $(SHTOOL) $(SHTOOLSLIB) $(FFTWLIB) $(LAPACKLIB) -c $(SRC)/grid/grid_mod.f
 
 $(FFT_FILE).o: $(SRC)/grid/$(FFT_FILE).f const_mod.o
-	$(F90) $(FAST) -c $(SRC)/grid/$(FFT_FILE).f
+	$(F90) $(FOPENMP) $(FAST) $(INCLUDES) $(FFTWLIB)  -c $(SRC)/grid/$(FFT_FILE).f
 
 # crystal directory
 group_mod.o: $(SRC)/crystal/group_mod.f const_mod.o version_mod.o
@@ -122,18 +125,16 @@ deform_mod.o: $(SRC)/crystal/deform_mod.f\
 	$(F90) $(FAST) -c $(SRC)/crystal/deform_mod.f
 
 # scf directory
-lebedev_mod.o: $(SRC)/scf/lebedev_mod.f
-	$(F90) $(FAST) -c $(SRC)/scf/lebedev_mod.f
 
 chemistry_mod.o: $(SRC)/scf/chemistry_mod.f const_mod.o io_mod.o
 	$(F90) $(FAST) -c $(SRC)/scf/chemistry_mod.f
 
 chain_mod.o: $(SRC)/scf/chain_mod.f const_mod.o\
-	chemistry_mod.o lebedev_mod.o $(FFT_FILE).o
+	chemistry_mod.o kronrod_mod.o $(FFT_FILE).o
 	$(F90) $(FAST) -c $(SRC)/scf/chain_mod.f
 
 step_mod.o: $(SRC)/scf/step_mod.f const_mod.o\
-	chain_mod.o $(FFT_FILE).o
+	chain_mod.o unit_cell_mod.o group_mod.o $(FFT_FILE).o
 	$(F90) $(FOPENMP) $(FAST) $(SHTOOL) $(SHTOOLSLIB) $(FFTWLIB) $(LAPACKLIB) -c $(SRC)/scf/step_mod.f
 
 scf_mod.f: $(SRC)/scf/scf_mod.fp.f

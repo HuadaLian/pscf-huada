@@ -35,62 +35,14 @@ module field_io_mod
 
    private
    public  :: input_field
-   public  :: input_Rmatrix
    public  :: output_field
    public  :: output_field_grid
+   public  :: output_fields 
+   public  :: field_unit 
    !***
 
+   integer, parameter :: field_unit = 22 ! omega and rho fields
 contains
-
-   !-------------------------------------------------------------------
-   !****p field_io_mod/input_Rmatrix
-   ! SUBROUTINE
-   !   input_Rmatrix(Rmatrix,Rmatrix_unit)
-   ! PURPOSE
-   !   Read matrix components from supplied io-unit
-   ! ARGUMENTS
-   !   matrix_file      =  vector array Rjj
-   !
-   !   field_unit =  unit number of file to read (open for reading)
-   ! SOURCE
-   !-------------------------------------------------------------------
-   subroutine input_Rmatrix(matrix,matrix_unit)
-
-   real(long),intent(INOUT) :: matrix(:,:,:)  ! (1;3 ,1:N_sph, 1:N_sph)
-   integer,intent(IN)       :: matrix_unit
-   !***
-
-   integer            :: i, j                        ! looping varialbes
-   integer            :: l,m,lp,mp                   ! index of harmonics , corresponding Rjj vector value         
-   real(long)         :: rjj(1:3)                    ! vector at R_jj'
-   integer            :: jx_index, jy_index,j_value  ! combined index of (l,m), corresponding value in Rjj                   
-   integer            :: N_sph                       ! # of spherical harmonics
-   type(version_type) :: version
-
-   N_sph=(lbar+1)**2
-   ! Input file format version (e.g., `format 1 0')
-   call input_version(version, matrix_unit)
-
-   ! skip 1 header lines (column lable)
-   read(matrix_unit,*) 
-
-   matrix = 0.0_long
-
-   ! 
-   DO
-      read(matrix_unit,*) l,m,lp,mp,rjj
-      jx_index = 1 + l **2 + (m +l )
-      jy_index = 1 + lp**2 + (mp+lp)
-      if (jx_index > N_sph .OR. jy_index > N_sph) then
-         EXIT
-      endif 
-      matrix(1:3,jx_index,jy_index) = (/ rjj(1:3) /)
-      matrix(1:3,jy_index,jx_index) = (/ rjj(1:3) /) 
-   END DO
-
-   end subroutine input_Rmatrix
-   !==============================================================
-
    !-------------------------------------------------------------------
    !****p field_io_mod/input_field
    ! SUBROUTINE
@@ -250,5 +202,27 @@ contains
    
    end subroutine output_field_grid
    !==============================================================
+
+   subroutine output_fields(prefix,f_unit,omega,rho,group_name)
+   !-----------------------------------------------------------------
+   ! Writes the output summary to the file output_prefix//suffix
+   !-----------------------------------------------------------------
+   character(*) , intent(IN) :: prefix
+   integer      , intent(IN) :: f_unit
+   real(long)   , intent(IN) :: omega(:,:)
+   real(long)   , intent(IN) :: rho(:,:) 
+   character(60), intent(IN) :: group_name
+
+   open(file=trim(prefix)//'omega', unit=f_unit,status='replace')
+   call output_field(omega,f_unit,group_name)
+   close(f_unit)
+
+   open(file=trim(prefix)//'rho',unit=f_unit,status='replace')
+   call output_field(rho,f_unit,group_name)
+   close(f_unit)
+
+   end subroutine output_fields
+   !============================================================
+
 
 end module field_io_mod

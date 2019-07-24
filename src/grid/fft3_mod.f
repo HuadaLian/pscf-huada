@@ -18,19 +18,34 @@
 !-----------------------------------------------------------------------
 module fft_mod
    use const_mod
+   use omp_lib
+   use, intrinsic :: iso_c_binding 
    implicit none
+   include 'fftw3.f03' 
 
    PRIVATE 
    PUBLIC :: fft_plan
-   PUBLIC :: create_fft_plan    ! initialize an fft_plan
-   PUBLIC :: fftc               ! complex FFT for 1, 2, or 3D
-   PUBLIC :: fft                ! Forward FFT for 1, 2, or 3D
-   PUBLIC :: ifft               ! Inverse FFT for 1, 2, or 3D
-   !***
+   PUBLIC :: fft_plan_many  
 
+   !Generic interface
+   PUBLIC :: create_fft_plan    ! initialize an fft_plan
+   PUBLIC :: create_fft_plan_many
+
+   !Generic interface 
+   PUBLIC :: fftc               ! complex FFT for 1, 2, or 3D
+
+   !Generic interface
+   PUBLIC :: fft                ! Forward FFT for 1, 2, or 3D
+   PUBLIC :: fft_many           ! Many Forward FFT for 1, 2, or 3D
+
+   !Generic interface
+   PUBLIC :: ifft               ! Inverse FFT for 1, 2, or 3D
+   PUBLIC :: ifft_many          ! Many Inverse FFT for 1, 2, or 3D
+
+   !***
    ! Parameters required by fftw3 supplied in fftw3.f
-   integer, parameter :: FFTW_ESTIMATE=64
-   integer, parameter :: FFTW_FORWARD=-1 ,FFTW_BACKWARD=1
+   !integer, parameter :: FFTW_ESTIMATE=64
+   !integer, parameter :: FFTW_FORWARD=-1 ,FFTW_BACKWARD=1
 
    !-------------------------------------------------------------------
    !****t fft_mod/fft_plan
@@ -48,6 +63,36 @@ module fft_mod
    end type fft_plan
    !***
 
+   !-------------------------------------------------------------------
+   !****t fft_mod/fft_plan_many
+   ! TYPE
+   !    fft_plan_many 
+   ! PURPOSE
+   !    Contains grid dimensions for FFT grid and integer pointers to
+   !    the "plan" structures used by the FFTW package
+   ! SOURCE
+   !-------------------------------------------------------------------
+   type fft_plan_many
+      integer    ::  n(3) 
+      integer    ::  howmany
+      integer*8,allocatable  ::  f(:)      ! fftw plan object for forward transform
+      integer*8,allocatable  ::  r(:)      ! fftw plan object for inverse transform
+   end type fft_plan_many
+   !***
+
+   interface create_fft_plan 
+      module procedure create_fft_plan
+      module procedure create_fft_plan_many
+   end interface
+   interface fft 
+      module procedure fft 
+      module procedure fft_many
+   end interface
+   interface ifft 
+      module procedure ifft 
+      module procedure ifft_many 
+   end interface
+
 contains
 
    !-------------------------------------------------------------------
@@ -63,8 +108,38 @@ contains
    type(fft_plan),intent(OUT)     :: plan
    logical, optional, intent(IN)  :: fft_c2c
    !***
+   integer                        :: void 
+
    plan%n=ngrid
    end subroutine create_fft_plan
+   !===================================================================
+
+   !-------------------------------------------------------------------
+   !****p fft_mod/create_fft_plan_many
+   ! SUBROUTINE
+   !    create_fft_plan_many
+   ! PURPOSE
+   !    Creates an fft_plan object for many transoformation of 
+   !    grids with dimensions ngrid(1),..,ngrid(dim)
+   !-------------------------------------------------------------------
+   subroutine create_fft_plan_many(ngrid,howmany,plan_many)
+   integer,intent(IN)             :: ngrid(3) ! dimensions of grid
+   integer,intent(IN)             :: howmany   ! location of jth element 
+   type(fft_plan_many),intent(OUT):: plan_many
+   !***
+   integer                        :: error,void
+
+   call omp_set_num_threads(omp_get_num_procs()/2) 
+
+   print *, omp_get_num_procs()/2, 'threads are used.'
+   plan_many%n       = ngrid
+   plan_many%howmany = howmany
+   ALLOCATE(plan_many%f(0:howmany-1), STAT= error) 
+   if (error /= 0) stop "plan_many%f(howmany) allocation error!" 
+   ALLOCATE(plan_many%r(0:howmany-1), STAT= error) 
+   if (error /= 0) stop "plan_many%r(howmany) allocation error!" 
+
+   end subroutine create_fft_plan_many
    !===================================================================
 
 
@@ -87,12 +162,53 @@ contains
    real(long), intent(IN)      :: in(0:,0:,0:)
    complex(long), intent(OUT)  :: out(0:,0:,0:)
    !***
+
    call dfftw_plan_dft_r2c_3d(plan%f,plan%n(1),plan%n(2),plan%n(3),&!
                               in,out,FFTW_ESTIMATE)
    call dfftw_execute(plan%f)
    call dfftw_destroy_plan(plan%f)
    end subroutine fft
    !===================================================================
+
+   !-------------------------------------------------------------------
+   !****p fft_mod/fft_many
+   ! SUBROUTINE
+   !     fft_many(plan_many,in,out)
+   ! PURPOSE
+   !    Calculates forward fft of in(s), returns result in out(s).
+   !    Wrapper for 1, 2, & 3 dimensional real -> complex transforms
+   ! ARGUMENTS
+   !    plan_many    - fft plan_many object
+   !    in, out      - real(long) 3D arrays 
+   ! COMMENT
+   !    in and out are dimensioned 0:ngrid(i)-1 for all i <= dim, 
+   !    and 0:0 for any unused dimensions with dim < i <= 3
+   !-------------------------------------------------------------------
+   subroutine fft_many(plan_many,in,out)
+   type(fft_plan_many),intent(IN)   :: plan_many
+   real(long),intent(in)            :: in(0:,0:,0:,0:)
+   complex(long), intent(OUT)       :: out(0:,0:,0:,0:)
+   !***
+   integer :: l  ! looping variables
+
+
+   do l = 0, plan_many%howmany-1
+      call dfftw_plan_dft_r2c_3d(plan_many%f(l),plan_many%n(1), plan_many%n(2),plan_many%n(3),&
+                              in(:,:,:,l), out(:,:,:,l), FFTW_ESTIMATE) 
+   end do 
+
+   !$OMP PARALLEL DO 
+   do l = 0, plan_many%howmany-1
+      call dfftw_execute(plan_many%f(l))
+   enddo 
+   !$OMP END PARALLEL DO  
+
+   do l = 0, plan_many%howmany-1
+      call dfftw_destroy_plan(plan_many%f(l))
+   enddo 
+
+   end subroutine fft_many
+
 
 
    !-------------------------------------------------------------------
@@ -115,11 +231,51 @@ contains
    complex(long), intent(IN)   :: in(0:,0:,0:)
    real(long), intent(OUT)     :: out(0:,0:,0:)
    !***
+
    call dfftw_plan_dft_c2r_3d(plan%r,plan%n(1),plan%n(2),plan%n(3),&!
                               in,out,FFTW_ESTIMATE)
    call dfftw_execute(plan%r)
    call dfftw_destroy_plan(plan%r)
    end subroutine ifft
+   !===================================================================
+
+   !-------------------------------------------------------------------
+   !****p fft_mod/ifft_many
+   ! SUBROUTINE
+   !     ifft_many(plan_many,in,out)
+   ! PURPOSE
+   !    Calculates a series of inverse fft of real array ins, returns in outs.
+   !    Wrapper for 1, 2, & 3 dimensional complex -> real transforms
+   ! ARGUMENTS
+   !    plan - fft plan object
+   !    in   - complex(long) 3D input array
+   !    out  - real(long) 3D input array
+   ! COMMENT
+   !    in and out are dimensioned 0:ngrid(i)-1 for all i <= dim, 
+   !    and 0:0 for any unused dimensions with dim < i <= 3
+   !-------------------------------------------------------------------
+   subroutine ifft_many(plan_many,in,out)
+   type(fft_plan_many),intent(IN)          :: plan_many
+   complex(long),intent(in)            :: in(0:,0:,0:,0:)
+   real(long), intent(OUT)     :: out(0:,0:,0:,0:)
+   !***
+   integer :: l 
+
+   do l = 0, plan_many%howmany-1
+      call dfftw_plan_dft_c2r_3d(plan_many%r(l),plan_many%n(1), plan_many%n(2),plan_many%n(3),&
+                              in(:,:,:,l), out(:,:,:,l), FFTW_ESTIMATE) 
+   end do 
+   !$OMP PARALLEL DO 
+   do l = 0, plan_many%howmany-1
+      call dfftw_execute(plan_many%r(l))
+   enddo 
+   !$OMP PARALLEL DO 
+
+   do l = 0, plan_many%howmany-1
+      call dfftw_destroy_plan(plan_many%r(l))
+   enddo 
+
+   end subroutine ifft_many
    !===================================================================
 
 

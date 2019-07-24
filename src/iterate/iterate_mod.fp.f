@@ -43,6 +43,7 @@
 module iterate_mod
    use const_mod
    use io_mod
+   use field_io_mod 
    use response_pd_mod
    implicit none
 
@@ -134,6 +135,9 @@ module iterate_mod
    real(long),allocatable  :: cp_hist(:,:)
     
 
+   ! output varialbes 
+   character(60) :: group_name    ! name of space group 
+   character(60) :: output_prefix ! prefix for output files 
 contains
 
    !--------------------------------------------------------------------
@@ -197,13 +201,18 @@ contains
    !   integer N      = # of basis functions
    ! SOURCE
    !---------------------------------------------------------------------
-   subroutine iterate_NR_startup(N)
+   subroutine iterate_NR_startup(N,group,out_pre)
    use unit_cell_mod, only : N_cell_param
    use chemistry_mod, only : N_monomer, ensemble
    integer, intent(IN)  :: N       ! # of basis functions
+   character(60), intent(IN) :: group 
+   character(60), intent(IN) :: out_pre
    !***
 
    integer              :: info    ! message variable for dgetri
+
+   group_name    = group 
+   output_prefix = out_pre 
 
    if (N_cut > N) then
        N_cut = N
@@ -477,6 +486,9 @@ contains
       call divide_energy(rho,omega,phi_chain,phi_solvent,Q,f_Helmholtz,f_component,overlap)
       !# endif
 
+      if (mod(itr, 10)==0) then 
+         call output_fields(output_prefix,field_unit,omega,rho,group_name)
+      endif
       itr = itr + 1
 
    end do iterative_loop
@@ -531,6 +543,7 @@ contains
       error1 = maxval(abs(residual(1:error_index)))
       error2 = maxval(abs(residual(error_index:N_residual)))
       error  = max(error1, error2*stress_rescale)
+
 
       end subroutine update_without_linesearch
       !----------------------------------------------------------
@@ -614,6 +627,7 @@ contains
          error1 = maxval(abs(residual(1:error_index)))
          error2 = maxval(abs(residual(error_index:N_residual)))
          error  = max(error1, error2*stress_rescale)
+
 
          ! backtracking tests
          fnew  = dot_product(residual, residual) * 0.5_long

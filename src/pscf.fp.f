@@ -74,8 +74,8 @@ program pscf
                              N_cell_param, cell_param, &
                              make_unit_cell, R_basis, G_basis
    use group_mod,     only : output_group
-   use grid_mod,      only : ngrid, lbar, Rjj, chain_step, input_grid, input_chainstep, output_chainstep, &
-                             allocate_grid, make_ksq
+   use grid_mod,      only : ngrid, lmax, N_sph,chain_step, &
+                             input_grid, input_chainstep, output_chainstep, allocate_grid, make_ksq
    use basis_mod,     only : N_wave, N_star, group, &
                              make_basis, output_waves, release_basis
 
@@ -134,8 +134,6 @@ program pscf
    character(60)   :: input_filename  ! name of input field file
    character(60)   :: output_filename ! name of output field file
 
-   character(60)   :: input_Rmatrix_filename ! needed for wormlike chain solver
-
    !  Variable for field transformations
    integer                     :: i1, i2, i3, alpha
    integer, allocatable        :: grid_size(:)
@@ -176,6 +174,7 @@ program pscf
    logical :: basis_flag             = .FALSE. ! symmetrized basis made
    logical :: omega_flag             = .FALSE. ! initial omega exists
    logical :: Rmatrix_flag           = .FALSE. ! initial Rmatrix exists
+   logical :: Ymatrix_flag           = .FALSE. ! initial Ymatrix exists
    logical :: iterate_flag           = .FALSE. ! 1st iteration requested
    logical :: output_flag            = .FALSE. ! deferred iterate output
    logical :: sweep_flag             = .FALSE. ! sweep requested
@@ -187,7 +186,6 @@ program pscf
 
    ! File Unit numbers (parameters)
    integer, parameter :: out_unit   = 21 ! output summary
-   integer, parameter :: field_unit = 22 ! omega and rho fields
    integer, parameter :: matrix_unit= 23 ! Rmatrix 
    integer            :: ierr            ! error msg for file io
 
@@ -222,10 +220,11 @@ program pscf
       if (output_flag) then
          if (trim(op_string) == "SWEEP") then
             call output_summary(trim(output_prefix)//'0.')
-            call output_fields(trim(output_prefix)//'0.')
+            call output_fields( &
+               trim(output_prefix)//'0.',field_unit,omega,rho,group_name)
          else
             call output_summary(output_prefix)
-            call output_fields(output_prefix)
+            call output_fields(output_prefix,field_unit,omega,rho,group_name)
          end if
          output_flag = .FALSE.
       endif
@@ -442,9 +441,6 @@ program pscf
          ! Read name of input omega file
          call input(input_filename, 'input_filename')  
 
-         ! Read name of input Rmatrix file 
-         call input(input_filename, 'input_Rmatrix_filename') 
-
          ! Read scale factor: vref -> vref/vref_scale
          call input(vref_scale, 'vref_scale')
 
@@ -454,10 +450,6 @@ program pscf
          call input_field(omega, field_unit)
          close(field_unit)
 
-         ! Read Rmatrix, sharing the field_unit. 
-         open(unit=matrix_unit,file=trim(input_Rmatrix_filename),iostat=ierr)        
-         if (ierr/=0) stop "Error while opening Rmatrix file"
-         call input_Rmatrix(Rjj,matrix_unit)
          ! Rescale kuhn, chi, block_length, solvent_size
          ! See chemistry_mod
          call rescale_vref(vref_scale)
@@ -498,16 +490,6 @@ program pscf
             omega_flag = .TRUE.
          end if
 
-         ! Read Rmatrix file, if not input preceding RESCALE command
-         if (.not.Rmatrix_flag) then
-            call input(input_Rmatrix_filename, 'input_Rmatrix_filename')  ! input  file prefix
-            open(unit=matrix_unit,file=trim(input_Rmatrix_filename),iostat=ierr)
-            if (ierr/=0) stop "Error while opening Rmatrix source file."
-            call input_Rmatrix(Rjj,matrix_unit)
-            close(matrix_unit)
-            Rmatrix_flag = .TRUE.
-         end if
-
          call input(output_prefix,'output_prefix') ! output file prefix
 
          iterate_flag = .TRUE.
@@ -527,7 +509,7 @@ program pscf
          if (itr_algo=='NR') then
 
              ! Allocate private arrays for Newton-Raphson iteration
-             call iterate_NR_startup(N_star)
+             call iterate_NR_startup(N_star,group_name,output_prefix)
 
              write(6,FMT = "( / '************************************' / )" )
              ! Main Newton-Raphson iteration loop
@@ -693,7 +675,7 @@ program pscf
                   call output_summary( &
                       trim(output_prefix)//trim(int_string(j))//'.' )
                   call output_fields( &
-                      trim(output_prefix)//trim(int_string(j))//'.' )
+                     trim(output_prefix)//trim(int_string(j))//'.',field_unit,omega,rho,group_name )
                end if
                write(6,*)
 
@@ -1046,9 +1028,6 @@ contains ! internal subroutines of program pscf
    if (i.ne.0) stop 'Error allocating rho'
    allocate(stress(N_cell_param), stat = i )
    if (i.ne.0) stop 'Error allocating stress'
-   ! Auxilliary matrix for wormlike chain solver
-   allocate(Rjj(1:3,1:(lbar+1)**2,1:(lbar+1)**2), stat = i)  ! # of spherical harmonics = (lbar+1)**2  
-   if (i.ne.0) stop 'Error allocating Rmatrix'
 
    !# ifdef DEVEL
    allocate(overlap(N_monomer,N_monomer),stat = i )
@@ -1193,23 +1172,6 @@ contains ! internal subroutines of program pscf
    end subroutine output_summary
    !============================================================
 
-
-   subroutine output_fields(prefix)
-   !-----------------------------------------------------------------
-   ! Writes the output summary to the file output_prefix//suffix
-   !-----------------------------------------------------------------
-   character(*) :: prefix
-
-   open(file=trim(prefix)//'omega', unit=field_unit,status='replace')
-   call output_field(omega,field_unit,group_name)
-   close(field_unit)
-
-   open(file=trim(prefix)//'rho',unit=field_unit,status='replace')
-   call output_field(rho,field_unit,group_name)
-   close(field_unit)
-
-   end subroutine output_fields
-   !============================================================
 
 end program pscf
 !***

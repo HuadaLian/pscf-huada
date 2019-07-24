@@ -17,10 +17,9 @@
 !-----------------------------------------------------------------------
 module chain_mod
    use const_mod
-   use lebedev_mod
    use chemistry_mod
    use grid_mod
-   use fft_mod, only : fft_plan
+   use fft_mod
    implicit none
 
    private
@@ -29,8 +28,6 @@ module chain_mod
    public :: make_chain_grid
    public :: destroy_chain_grid
    !***
-
-   public :: allocate_q, allocate_qw    
 
    !****t chain_mod/chain_grid_type  -----------------------------------
    !  TYPE 
@@ -47,20 +44,18 @@ module chain_mod
       real(long), pointer     :: block_ds(:)        ! step size for block
       real(long), pointer     :: qf(:,:,:,:)        ! function qf(x,y,z,s) 
       real(long), pointer     :: qr(:,:,:,:)        ! function qr(x,y,z,s) 
-      real(long), pointer     :: rho(:,:,:,:)       ! rho(x,y,z,s)
-      real(long), pointer     :: qwf(:,:,:,:,:)   ! qwf(x,y,z,g,s)
-      real(long), pointer     :: qwr(:,:,:,:,:)   ! qwr(x,y,z,g,s)
+      real(long), pointer     :: rho(:,:,:,:)       ! rho(x,y,z,nblk)
+      real(long), pointer     :: qwf(:,:,:,:,:,:)   ! qwf(x,y,z,theta,phi,s)
+      real(long), pointer     :: qwr(:,:,:,:,:,:)   ! qwr(x,y,z,theta,phi,s)
       real(long), pointer     :: qwj(:,:,:,:,:)     ! function qwj(x,y,z,j,s)
       type(fft_plan)          :: plan               ! fft plan, see fft_mod
+      type(fft_plan_many)     :: plan_many          ! fft plan_many, see fft_mod
       real(long)              :: bigQ               ! chain partition func.
       complex(long), pointer  :: del_qf(:,:,:,:)    ! perturbation in qf
       complex(long), pointer  :: del_qr(:,:,:,:)    ! perturbation in qr
       complex(long)           :: delQ               ! perturbation in bigQ
    end type
    !***
-
-   logical       :: allocate_q = .FALSE.    ! By default 
-   logical       :: allocate_qw= .FALSE.    ! By default  
 
 contains
 
@@ -78,14 +73,14 @@ contains
    !***
 
    nullify( chain%block_bgn_lst, &
-            chain%block_ds,  &
-            chain%qf,        &
-            chain%qr,        &
-            chain%qwf,       &
-            chain%qwr,       &
-            chain%qwj,       &
-            chain%rho,       &
-            chain%del_qf,    &
+            chain%block_ds,      &
+            chain%qf,            &
+            chain%qr,            &
+            chain%qwf,           &
+            chain%qwr,           &
+            chain%qwj,           &
+            chain%rho,           &
+            chain%del_qf,        &
             chain%del_qr)
 
    end subroutine null_chain_grid
@@ -120,12 +115,13 @@ contains
    real(long),            intent(IN)     :: ds(:)
    logical,optional,      intent(IN)     :: perturb
    integer,optional,      intent(IN)     :: order
+
    !***
    real(long)            :: ds_iblk            ! step size of the ith block according to type              
    integer               :: iblk               ! index to block
    integer               :: bgnsGaus           ! index of beginers for Gaussian block
    integer               :: bgnsWorm           ! index of beginers for Wormlike block
-   integer               :: nx,ny,nz,nt,i   ! loop indices
+   integer               :: nx,ny,nz,nt,np,i   ! loop indices
 
    integer               :: error              ! allocation error-message
 
@@ -133,10 +129,8 @@ contains
    do i=1, nblk
       if (blk_type(i)=='Gaussian') then
          chain%block_exist(1) = .TRUE.
-         allocate_q =.TRUE. 
       elseif (blk_type(i)=='Wormlike') then
          chain%block_exist(2) = .TRUE.
-         allocate_qw = .TRUE. 
       else
          stop 'Invalid type of block'
       endif
@@ -146,7 +140,8 @@ contains
    ny=plan%n(2)-1
    nz=plan%n(3)-1
    if (chain%block_exist(2)) then
-      nt = lebedev_order -1
+      nt = lmax
+      np = 2*lmax 
    endif
    chain%plan=plan
 
@@ -165,8 +160,8 @@ contains
       if (error /= 0) stop 'chain%rho allocation error!'
    end if
 
-   bgnsGaus=1
-   bgnsWorm=1
+   bgnsGaus=0
+   bgnsWorm=0
 
    do i=1, nblk    ! loop over blocks
 
@@ -190,13 +185,17 @@ contains
       ! propagator for gaus and worm are saved in two array. 
       select case(blk_type(i))
       case ("Gaussian")
+         bgnsGaus = bgnsGaus + 1
          chain%block_bgn_lst(1,i) = bgnsGaus
          bgnsGaus = bgnsGaus + iblk * 2
-         chain%block_bgn_lst(2,i) = bgnsGaus-1
+         chain%block_bgn_lst(2,i) = bgnsGaus 
+
       case ('Wormlike')
+         bgnsWorm = bgnsWorm + 1
          chain%block_bgn_lst(1,i) = bgnsWorm
          bgnsWorm = bgnsWorm + iblk * 2
-         chain%block_bgn_lst(2,i) = bgnsWorm-1
+         chain%block_bgn_lst(2,i) = bgnsWorm 
+
       case default
          write(6,*) 'Error: Invalid block_type'
          exit 
@@ -204,29 +203,31 @@ contains
    end do
 
    if ( chain%block_exist(1) ) then
-      allocate(chain%qf(0:nx,0:ny,0:nz,bgnsGaus),STAT=error)
+      allocate(chain%qf(0:nx,0:ny,0:nz,1:bgnsGaus),STAT=error)
       if (error /= 0) stop "chain%qf allocation error!"
 
-      allocate(chain%qr(0:nx,0:ny,0:nz,bgnsGaus),STAT=error)
+      allocate(chain%qr(0:nx,0:ny,0:nz,1:bgnsGaus),STAT=error)
       if (error /= 0) stop "chain%qr allocation error!"
    end if
 
    if ( chain%block_exist(2) ) then
-      allocate(chain%qwf(0:nx,0:ny,0:nz,0:nt,bgnsWorm),STAT=error)
+      allocate(chain%qwf(0:nx,0:ny,0:nz,0:nt,0:np,1:bgnsWorm),STAT=error)
       if (error /= 0) stop "chain%qwf allocation error!"
 
-      allocate(chain%qwr(0:nx,0:ny,0:nz,0:nt,bgnsWorm),STAT=error)
+      allocate(chain%qwr(0:nx,0:ny,0:nz,0:nt,0:np,1:bgnsWorm),STAT=error)
       if (error /= 0) stop "chain%qwr allocation error!"
 
-      allocate(chain%qwj(0:nx,0:ny,0:nz,(lbar+1)**2,bgnsWorm),STAT=error)
+      allocate(chain%qwj(0:nx,0:ny,0:nz,0:N_sph-1,1:bgnsWorm),STAT=error)
       if (error /= 0) stop "chain%qwr allocation error!"
+
+      call create_fft_plan(plan%n, N_sph, chain%plan_many) 
    end if
 
    if ( (present(perturb)) .and. perturb ) then
-      allocate(chain%del_qf(0:nx,0:ny,0:nz,bgnsGaus),STAT=error)
+      allocate(chain%del_qf(0:nx,0:ny,0:nz,1:bgnsGaus),STAT=error)
       if (error /= 0) stop "chain%qf allocation error!"
       
-      allocate(chain%del_qr(0:nx,0:ny,0:nz,bgnsGaus),STAT=error)
+      allocate(chain%del_qr(0:nx,0:ny,0:nz,1:bgnsGaus),STAT=error)
       if (error /= 0) stop "chain%qr allocation error!"
     end if
 
@@ -276,17 +277,17 @@ contains
    endif
 
    if ( associated(chain%qwf) ) then
-      deallocate(chain%qf,STAT=error)
+      deallocate(chain%qwf,STAT=error)
       if (error /= 0) stop "chain%qf deallocation error!"
    endif
 
    if ( associated(chain%qwr) ) then
-      deallocate(chain%qr,STAT=error)
+      deallocate(chain%qwr,STAT=error)
       if (error /= 0) stop "chain%qr deallocation error!"
    endif
 
    if ( associated(chain%qwj) ) then
-      deallocate(chain%qr,STAT=error)
+      deallocate(chain%qwj,STAT=error)
       if (error /= 0) stop "chain%qr deallocation error!"
    endif
 
