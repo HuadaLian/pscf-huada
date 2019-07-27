@@ -19,9 +19,7 @@
 module fft_mod
    use const_mod
    use omp_lib
-   use, intrinsic :: iso_c_binding 
    implicit none
-   include 'fftw3.f03' 
 
    PRIVATE 
    PUBLIC :: fft_plan
@@ -44,8 +42,8 @@ module fft_mod
 
    !***
    ! Parameters required by fftw3 supplied in fftw3.f
-   !integer, parameter :: FFTW_ESTIMATE=64
-   !integer, parameter :: FFTW_FORWARD=-1 ,FFTW_BACKWARD=1
+   integer, parameter :: FFTW_ESTIMATE=64
+   integer, parameter :: FFTW_FORWARD=-1 ,FFTW_BACKWARD=1
 
    !-------------------------------------------------------------------
    !****t fft_mod/fft_plan
@@ -74,9 +72,10 @@ module fft_mod
    !-------------------------------------------------------------------
    type fft_plan_many
       integer    ::  n(3) 
-      integer    ::  howmany
-      integer*8,allocatable  ::  f(:)      ! fftw plan object for forward transform
-      integer*8,allocatable  ::  r(:)      ! fftw plan object for inverse transform
+      integer    ::  howmany_l
+      integer    ::  howmany_m 
+      integer*8,allocatable  ::  f(:,:)      ! fftw plan object for forward transform
+      integer*8,allocatable  ::  r(:,:)      ! fftw plan object for inverse transform
    end type fft_plan_many
    !***
 
@@ -122,9 +121,11 @@ contains
    !    Creates an fft_plan object for many transoformation of 
    !    grids with dimensions ngrid(1),..,ngrid(dim)
    !-------------------------------------------------------------------
-   subroutine create_fft_plan_many(ngrid,howmany,plan_many)
-   integer,intent(IN)             :: ngrid(3) ! dimensions of grid
-   integer,intent(IN)             :: howmany   ! location of jth element 
+   subroutine create_fft_plan_many(ngrid,howmany_l,howmany_m,plan_many)
+   integer,intent(IN)             :: ngrid(3)    ! dimensions of grid
+   integer,intent(IN)             :: howmany_l   !
+   integer,intent(IN)             :: howmany_m   !
+
    type(fft_plan_many),intent(OUT):: plan_many
    !***
    integer                        :: error,void
@@ -133,10 +134,12 @@ contains
 
    print *, omp_get_num_procs()/2, 'threads are used.'
    plan_many%n       = ngrid
-   plan_many%howmany = howmany
-   ALLOCATE(plan_many%f(0:howmany-1), STAT= error) 
+   plan_many%howmany_l = howmany_l
+   plan_many%howmany_m = howmany_m
+
+   ALLOCATE(plan_many%f(0:howmany_l-1,0:howmany_m-1), STAT= error) 
    if (error /= 0) stop "plan_many%f(howmany) allocation error!" 
-   ALLOCATE(plan_many%r(0:howmany-1), STAT= error) 
+   ALLOCATE(plan_many%r(0:howmany_l-1,0:howmany_m-1), STAT= error) 
    if (error /= 0) stop "plan_many%r(howmany) allocation error!" 
 
    end subroutine create_fft_plan_many
@@ -186,25 +189,31 @@ contains
    !-------------------------------------------------------------------
    subroutine fft_many(plan_many,in,out)
    type(fft_plan_many),intent(IN)   :: plan_many
-   real(long),intent(in)            :: in(0:,0:,0:,0:)
-   complex(long), intent(OUT)       :: out(0:,0:,0:,0:)
+   real(long),intent(in)            :: in(0:,0:,0:,0:,0:)
+   complex(long), intent(OUT)       :: out(0:,0:,0:,0:,0:)
    !***
-   integer :: l  ! looping variables
+   integer :: l,m  ! looping variables
 
 
-   do l = 0, plan_many%howmany-1
-      call dfftw_plan_dft_r2c_3d(plan_many%f(l),plan_many%n(1), plan_many%n(2),plan_many%n(3),&
-                              in(:,:,:,l), out(:,:,:,l), FFTW_ESTIMATE) 
-   end do 
+   do l = 0, plan_many%howmany_l-1
+   do m = 0, plan_many%howmany_m-1
+      call dfftw_plan_dft_r2c_3d(plan_many%f(l,m),plan_many%n(1), plan_many%n(2),plan_many%n(3),&
+                              in(:,:,:,l,m), out(:,:,:,l,m), FFTW_ESTIMATE) 
+   enddo 
+   enddo
 
    !$OMP PARALLEL DO 
-   do l = 0, plan_many%howmany-1
-      call dfftw_execute(plan_many%f(l))
+   do l = 0, plan_many%howmany_l-1
+   do m = 0, plan_many%howmany_m-1 
+      call dfftw_execute(plan_many%f(l,m))
+   enddo
    enddo 
    !$OMP END PARALLEL DO  
 
-   do l = 0, plan_many%howmany-1
-      call dfftw_destroy_plan(plan_many%f(l))
+   do l = 0, plan_many%howmany_l-1
+   do m = 0, plan_many%howmany_m-1
+      call dfftw_destroy_plan(plan_many%f(l,m))
+   enddo
    enddo 
 
    end subroutine fft_many
@@ -254,30 +263,36 @@ contains
    !    in and out are dimensioned 0:ngrid(i)-1 for all i <= dim, 
    !    and 0:0 for any unused dimensions with dim < i <= 3
    !-------------------------------------------------------------------
+
    subroutine ifft_many(plan_many,in,out)
-   type(fft_plan_many),intent(IN)          :: plan_many
-   complex(long),intent(in)            :: in(0:,0:,0:,0:)
-   real(long), intent(OUT)     :: out(0:,0:,0:,0:)
+   type(fft_plan_many),intent(IN)   :: plan_many
+   complex(long),intent(in)            :: in(0:,0:,0:,0:,0:)
+   real(long), intent(OUT)       :: out(0:,0:,0:,0:,0:)
    !***
-   integer :: l 
+   integer :: l,m  ! looping variables
 
-   do l = 0, plan_many%howmany-1
-      call dfftw_plan_dft_c2r_3d(plan_many%r(l),plan_many%n(1), plan_many%n(2),plan_many%n(3),&
-                              in(:,:,:,l), out(:,:,:,l), FFTW_ESTIMATE) 
-   end do 
-   !$OMP PARALLEL DO 
-   do l = 0, plan_many%howmany-1
-      call dfftw_execute(plan_many%r(l))
+   do l = 0, plan_many%howmany_l-1
+   do m = 0, plan_many%howmany_m-1
+      call dfftw_plan_dft_c2r_3d(plan_many%r(l,m),plan_many%n(1), plan_many%n(2),plan_many%n(3),&
+                              in(:,:,:,l,m), out(:,:,:,l,m), FFTW_ESTIMATE) 
    enddo 
-   !$OMP PARALLEL DO 
+   enddo 
 
-   do l = 0, plan_many%howmany-1
-      call dfftw_destroy_plan(plan_many%r(l))
+   !$OMP PARALLEL DO 
+   do l = 0, plan_many%howmany_l-1
+   do m = 0, plan_many%howmany_m-1 
+      call dfftw_execute(plan_many%r(l,m))
+   enddo
+   enddo 
+   !$OMP END PARALLEL DO  
+
+   do l = 0, plan_many%howmany_l-1
+   do m = 0, plan_many%howmany_m-1
+      call dfftw_destroy_plan(plan_many%r(l,m))
+   enddo
    enddo 
 
    end subroutine ifft_many
-   !===================================================================
-
 
    !-------------------------------------------------------------------
    !****p fft_mod/fftc

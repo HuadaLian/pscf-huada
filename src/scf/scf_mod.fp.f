@@ -20,6 +20,7 @@
 !----------------------------------------------------------------------
 module scf_mod 
    use const_mod
+   use SHTOOLS
    use chemistry_mod
    use fft_mod
    use grid_mod
@@ -68,8 +69,7 @@ module scf_mod
    real(long),allocatable :: q0(:,:,:)      ! temp storage of 0th step for Gaussian block 
    real(long),allocatable :: qr0(:,:,:)    ! temp storage 
 
-   real(long),allocatable :: qwj0(:,:,:,:)  ! temp storage of 0th step for wormlike block
-   real(long),allocatable :: qw0(:,:,:,:,:)   ! temp storage of 0th step for wormlike block          
+   real(long),allocatable :: qru_inv(:,:,:,:,:) ! temp storage of inversion of qw 
 
    !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
    ! Generic Interfaces
@@ -130,12 +130,9 @@ contains
       if(error /= 0) STOP "qr0 allocation error in scf_mod/density_startup"
    endif
 
-
-   if (.NOT. allocated(qw0) ) then
-      allocate(qw0(0:N_grids(1)-1,0:N_grids(2)-1,0:N_grids(3)-1,0:lmax,0:2*lmax),STAT=error)
-      if(error /= 0) STOP "q0 allocation error in scf_mod/density_startup"
-      allocate(qwj0(0:N_grids(1)-1,0:N_grids(2)-1,0:N_grids(3)-1,0:N_sph-1),STAT=error)
-      if(error /= 0) STOP "q0 allocation error in scf_mod/density_startup"
+   if (.NOT. allocated(qru_inv) ) then 
+      allocate(qru_inv(0:N_grids(1)-1,0:N_grids(2)-1,0:N_grids(3)-1,0:lmax,0:2*lmax),STAT=error)
+      if(error /= 0) STOP "qru_inv allocation error in scf_mod/density_startup"
    endif
 
    if ( .NOT. update_chain ) then
@@ -389,7 +386,6 @@ contains
       chain%qf(:,:,:,1) = 1.0_long 
    case ('Wormlike')
       chain%qwf(:,:,:,:,:,1) = 1.0_long 
-      call qw_decompose(chain%qwf(:,:,:,:,:,1),chain%qwj(:,:,:,:,1),1)
    case default
       stop 'Invalid type of block' 
    end select
@@ -420,34 +416,19 @@ contains
                   chain%qwf(:,:,:,l,m,chain%block_bgn_lst(1,i_blk+1)) = chain%qf(:,:,:,lst) 
                enddo 
                enddo
-               call qw_decompose(chain%qwf(:,:,:,:,:,chain%block_bgn_lst(1,i_blk+1)),&
-                                 chain%qwj(:,:,:,:,chain%block_bgn_lst(1,i_blk+1)),1 )
             else
                chain%qf(:,:,:,chain%block_bgn_lst(1,i_blk+1)) = chain%qf(:,:,:,lst)
             endif
          endif
 
       case('Wormlike')
-         call make_propg(ds, b, omega(:,:,:,monomer),Index_worm_block(i_blk,i_chain),1)
-
-         if (lst-bgn < 4) stop "Step size is too large!"
-         ! update first and second steps by euler method 
-         do istep = 0,1
-            call step_wormlike_euler(chain%qwj(:,:,:,:,bgn+istep)  ,  & 
-                                     chain%qwj(:,:,:,:,bgn+istep+1),  &
-                                     chain%qwf(:,:,:,:,:,bgn+istep+1),  &
-                                     chain%plan_many,1)
-         end do 
-         bgn = bgn + 2
+         call make_propg(ds, b, omega(:,:,:,monomer))
 
          ! update the rest steps by BDF3 
          do istep = bgn, lst-1
-            call step_wormlike_bdf3(chain%qwj(:,:,:,:,istep-2),  &
-                                    chain%qwj(:,:,:,:,istep-1),  &
-                                    chain%qwj(:,:,:,:,istep  ),  &
-                                    chain%qwj(:,:,:,:,istep+1),  &
-                                    chain%qwf(:,:,:,:,:,istep+1),  &
-                                    chain%plan_many,1) 
+            call step_wormlike(chain%qwf(:,:,:,:,:,istep)  ,  &
+                               chain%qwf(:,:,:,:,:,istep+1),  &
+                               chain%plan_many,1) 
          enddo 
 
          if (i_blk < N_block(i_chain)) then
@@ -465,7 +446,6 @@ contains
                enddo 
                !$OMP END PARALLEL DO 
             else 
-               chain%qwj(:,:,:,:,chain%block_bgn_lst(1,i_blk+1)) = chain%qwj(:,:,:,:,lst) 
                chain%qwf(:,:,:,:,:,chain%block_bgn_lst(1,i_blk+1)) = chain%qwf(:,:,:,:,:,lst) 
             endif
          endif
@@ -483,7 +463,6 @@ contains
       chain%qr(:,:,:,chain_end) = 1.0_long 
    case ('Wormlike')
       chain%qwr(:,:,:,:,:,chain_end) = 1.0_long 
-      call qw_decompose(chain%qwr(:,:,:,:,:,chain_end),chain%qwj(:,:,:,:,chain_end),-1) 
    case default
       stop 'Invalid type of block' 
    end select
@@ -526,10 +505,8 @@ contains
          end do
 
       case('Wormlike')
-         call make_propg(ds, b, omega(:,:,:,monomer),Index_worm_block(i_blk,i_chain),-1)
+         call make_propg(ds, b, omega(:,:,:,monomer))
 
-         if (lst-bgn < 4) stop "Step size is too large! Why?"
-         ! last step is 
          if (i_blk < N_block(i_chain)) then
             previous_blk_type = block_type(i_blk+1,i_chain) 
             if(previous_blk_type=='Gaussian') then
@@ -541,31 +518,15 @@ contains
                enddo 
                enddo
                !$OMP END PARALLEL DO 
-               call qw_decompose(chain%qwr(:,:,:,:,:,lst),chain%qwj(:,:,:,:,lst),-1)
             elseif (previous_blk_type=='Wormlike') then 
                chain%qwr(:,:,:,:,:,lst) = chain%qwr(:,:,:,:,:,chain%block_bgn_lst(1,i_blk+1))
-               chain%qwj(:,:,:,:,lst) = chain%qwj(:,:,:,:,chain%block_bgn_lst(1,i_blk+1))
-
             endif
          endif
 
-         ! update first and second steps by euler method 
-         do istep = 0,1
-            call step_wormlike_euler(chain%qwj(:,:,:,:,lst-istep)  ,&
-                                     chain%qwj(:,:,:,:,lst-istep-1),&
-                                     chain%qwr(:,:,:,:,:,lst-istep-1),&
-                                     chain%plan_many,-1)
-         end do 
-         lst = lst -2 
-
-         ! update the rest steps by BDF3 
          do istep = lst, bgn+1, -1
-            call step_wormlike_bdf3(chain%qwj(:,:,:,:,istep+2), &
-                                    chain%qwj(:,:,:,:,istep+1), &
-                                    chain%qwj(:,:,:,:,istep  ), &
-                                    chain%qwj(:,:,:,:,istep-1), &
-                                    chain%qwr(:,:,:,:,:,istep-1), &
-                                    chain%plan_many,-1) 
+            call step_wormlike(chain%qwr(:,:,:,:,:,istep  ), &
+                               chain%qwr(:,:,:,:,:,istep-1), &
+                               chain%plan_many,-1) 
          enddo 
 
 
@@ -1273,6 +1234,8 @@ contains
    integer      :: ibgn, iend !index of the first and last segment
    real(long)   :: fourpi
    real(long)   :: qwfr_product(0:lmax,0:2*lmax) 
+   real(long)   :: cilm(2,0:lmax,0:lmax)
+   real(long)   :: cilm2(2,0:lmax,0:lmax) 
    !*** 
 
    fourpi = 2.0_long*4.0_long*acos(0.0_long) 
@@ -1285,57 +1248,70 @@ contains
    do iz=0,ngrid(3)-1
    do iy=0,ngrid(2)-1
    do ix=0,ngrid(1)-1
-   qwfr_product = qwf_in(ix,iy,iz,:,:,ibgn)*qwr_in(ix,iy,iz,:,:,ibgn)
+   call SHExpandGLQ(cilm, lmax, qwr_in(ix,iy,iz,:,:,ibgn), weight, plx, csphase=1) 
+   do l=0,lmax 
+      cilm2(:,l,:) = cilm(:,l,:) * (-1)**l 
+   enddo
+   call MakeGridGLQ(qru_inv(ix,iy,iz,:,:), cilm2, lmax, plx, csphase=1) 
+   qwfr_product = qwf_in(ix,iy,iz,:,:,ibgn)*qru_inv(ix,iy,iz,:,:) 
    rho_out(ix,iy,iz)=GL_integrate(qwfr_product,weight) 
    end do
    end do
    end do
 
-   !$OMP PARALLEL DO collapse(3) private(qwfr_product)
    do iz=0,ngrid(3)-1
    do iy=0,ngrid(2)-1
    do ix=0,ngrid(1)-1
-   qwfr_product = qwf_in(ix,iy,iz,:,:,iend)*qwr_in(ix,iy,iz,:,:,iend)
+   call SHExpandGLQ(cilm, lmax, qwr_in(ix,iy,iz,:,:,iend), weight, plx, csphase=1) 
+   do l=0,lmax 
+      cilm2(:,l,:) = cilm(:,l,:) * (-1)**l 
+   enddo
+   call MakeGridGLQ(qru_inv(ix,iy,iz,:,:), cilm2, lmax, plx, csphase=1) 
+   qwfr_product = qwf_in(ix,iy,iz,:,:,iend)*qru_inv(ix,iy,iz,:,:) 
    rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
                         GL_integrate(qwfr_product,weight) 
    end do
    end do
    end do
-   !$OMP END PARALLEL DO 
 
-   !$OMP PARALLEL DO collapse(4) private(qwfr_product)
    ! Odd indices: Sum values of qf(i)*qr(i)*4.0 with i odd
    do j=ibgn+1,iend-1,2
       do iz=0,ngrid(3)-1
       do iy=0,ngrid(2)-1
       do ix=0,ngrid(1)-1
-      qwfr_product = qwf_in(ix,iy,iz,:,:,j)*qwr_in(ix,iy,iz,:,:,j)
+      call SHExpandGLQ(cilm, lmax, qwr_in(ix,iy,iz,:,:,j), weight, plx, csphase=1) 
+      do l=0,lmax 
+         cilm2(:,l,:) = cilm(:,l,:) * (-1)**l 
+      enddo
+      call MakeGridGLQ(qru_inv(ix,iy,iz,:,:), cilm2, lmax, plx, csphase=1) 
+      qwfr_product = qwf_in(ix,iy,iz,:,:,j)*qru_inv(ix,iy,iz,:,:)
       rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
                            GL_integrate(qwfr_product,weight)*4.0_long
       end do
       end do
       end do
    end do
-   !$OMP END PARALLEL DO 
 
-   !$OMP PARALLEL DO collapse(4) private(qwfr_product)
    ! Even indices: Sum values of qf(i)*qr(i)*2.0 with i even
    do j=ibgn+2,iend-2,2
       do iz=0,ngrid(3)-1
       do iy=0,ngrid(2)-1
       do ix=0,ngrid(1)-1
-      qwfr_product = qwf_in(ix,iy,iz,:,:,j)*qwr_in(ix,iy,iz,:,:,j)
+      call SHExpandGLQ(cilm, lmax, qwr_in(ix,iy,iz,:,:,j), weight, plx, csphase=1) 
+      do l=0,lmax 
+         cilm2(:,l,:) = cilm(:,l,:) * (-1)**l 
+      enddo
+      call MakeGridGLQ(qru_inv(ix,iy,iz,:,:), cilm2, lmax, plx, csphase=1) 
+      qwfr_product = qwf_in(ix,iy,iz,:,:,j)*qru_inv(ix,iy,iz,:,:)
       rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
                            GL_integrate(qwfr_product,weight)*2.0_long
       end do
       end do
       end do
    end do
-   !$OMP END PARALLEL DO 
 
    ! Multiply sum by ds/3
    rho_out=rho_out*ds/3.0_long/fourpi
-
    end subroutine rho_field_wormlike 
 
 

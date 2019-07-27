@@ -47,7 +47,6 @@ module chain_mod
       real(long), pointer     :: rho(:,:,:,:)       ! rho(x,y,z,nblk)
       real(long), pointer     :: qwf(:,:,:,:,:,:)   ! qwf(x,y,z,theta,phi,s)
       real(long), pointer     :: qwr(:,:,:,:,:,:)   ! qwr(x,y,z,theta,phi,s)
-      real(long), pointer     :: qwj(:,:,:,:,:)     ! function qwj(x,y,z,j,s)
       type(fft_plan)          :: plan               ! fft plan, see fft_mod
       type(fft_plan_many)     :: plan_many          ! fft plan_many, see fft_mod
       real(long)              :: bigQ               ! chain partition func.
@@ -78,7 +77,6 @@ contains
             chain%qr,            &
             chain%qwf,           &
             chain%qwr,           &
-            chain%qwj,           &
             chain%rho,           &
             chain%del_qf,        &
             chain%del_qr)
@@ -217,10 +215,7 @@ contains
       allocate(chain%qwr(0:nx,0:ny,0:nz,0:nt,0:np,1:bgnsWorm),STAT=error)
       if (error /= 0) stop "chain%qwr allocation error!"
 
-      allocate(chain%qwj(0:nx,0:ny,0:nz,0:N_sph-1,1:bgnsWorm),STAT=error)
-      if (error /= 0) stop "chain%qwr allocation error!"
-
-      call create_fft_plan(plan%n, N_sph, chain%plan_many) 
+      call create_fft_plan(plan%n, lmax+1,2*lmax+1, chain%plan_many) 
    end if
 
    if ( (present(perturb)) .and. perturb ) then
@@ -285,12 +280,6 @@ contains
       deallocate(chain%qwr,STAT=error)
       if (error /= 0) stop "chain%qr deallocation error!"
    endif
-
-   if ( associated(chain%qwj) ) then
-      deallocate(chain%qwj,STAT=error)
-      if (error /= 0) stop "chain%qr deallocation error!"
-   endif
-
 
    if ( associated(chain%del_qf) ) then
       deallocate(chain%del_qf,STAT=error)
