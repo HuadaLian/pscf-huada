@@ -17,19 +17,19 @@ FORPEDO=$(REPO)/tools/python/preprocess-0.6.1/preprocess.py
 .PHONY: all clean install uninstall
 
 all:
-	make pscf_back
+	make pscf
 
 clean:
-	rm -f  *.o  *.mod  *.f  pscf_back
+	rm -f  *.o  *.mod  *.f  pscf
 
-pscf_back:	pscf.o\
+pscf:	pscf.o\
 	const_mod.o string_mod.o io_mod.o version_mod.o field_io_mod.o\
 	unit_cell_mod.o group_mod.o space_groups_mod.o basis_mod.o\
 	chemistry_mod.o scf_mod.o iterate_mod.o sweep_mod.o\
 	step_mod.o kronrod_mod.o grid_mod.o chain_mod.o $(FFT_FILE).o grid_basis_mod.o\
 	response_pd_mod.o spinodal_mod.o\
 	response_mod.o response_step_mod.o extrapolate_mod.o
-	$(F90) $(FOPENMP) $(LINK) -o pscf_back pscf.o \
+	$(F90) $(FOPENMP) $(LINK) -o pscf pscf.o \
 	const_mod.o string_mod.o io_mod.o version_mod.o field_io_mod.o \
 	unit_cell_mod.o group_mod.o space_groups_mod.o basis_mod.o \
 	chemistry_mod.o scf_mod.o iterate_mod.o sweep_mod.o \
