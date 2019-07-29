@@ -1250,7 +1250,9 @@ contains
    do ix=0,ngrid(1)-1
    call SHExpandGLQ(cilm, lmax, qwr_in(ix,iy,iz,:,:,ibgn), weight, plx, csphase=1) 
    do l=0,lmax 
-      cilm2(:,l,:) = cilm(:,l,:) * (-1)**l 
+   do m=0,lmax 
+      cilm2(:,l,m) = cilm(:,l,m) * (-1)**(l+m)  
+   enddo
    enddo
    call MakeGridGLQ(qru_inv(ix,iy,iz,:,:), cilm2, lmax, plx, csphase=1) 
    qwfr_product = qwf_in(ix,iy,iz,:,:,ibgn)*qru_inv(ix,iy,iz,:,:) 
@@ -1264,7 +1266,9 @@ contains
    do ix=0,ngrid(1)-1
    call SHExpandGLQ(cilm, lmax, qwr_in(ix,iy,iz,:,:,iend), weight, plx, csphase=1) 
    do l=0,lmax 
-      cilm2(:,l,:) = cilm(:,l,:) * (-1)**l 
+   do m=0,lmax
+      cilm2(:,l,m) = cilm(:,l,m) * (-1)**(l+m) 
+   enddo
    enddo
    call MakeGridGLQ(qru_inv(ix,iy,iz,:,:), cilm2, lmax, plx, csphase=1) 
    qwfr_product = qwf_in(ix,iy,iz,:,:,iend)*qru_inv(ix,iy,iz,:,:) 
@@ -1281,7 +1285,9 @@ contains
       do ix=0,ngrid(1)-1
       call SHExpandGLQ(cilm, lmax, qwr_in(ix,iy,iz,:,:,j), weight, plx, csphase=1) 
       do l=0,lmax 
-         cilm2(:,l,:) = cilm(:,l,:) * (-1)**l 
+      do m=0,lmax
+         cilm2(:,l,m) = cilm(:,l,m) * (-1)**(l+m) 
+      enddo
       enddo
       call MakeGridGLQ(qru_inv(ix,iy,iz,:,:), cilm2, lmax, plx, csphase=1) 
       qwfr_product = qwf_in(ix,iy,iz,:,:,j)*qru_inv(ix,iy,iz,:,:)
@@ -1299,7 +1305,9 @@ contains
       do ix=0,ngrid(1)-1
       call SHExpandGLQ(cilm, lmax, qwr_in(ix,iy,iz,:,:,j), weight, plx, csphase=1) 
       do l=0,lmax 
-         cilm2(:,l,:) = cilm(:,l,:) * (-1)**l 
+      do m=0,lmax
+         cilm2(:,l,m) = cilm(:,l,m) * (-1)**(l+m) 
+      enddo
       enddo
       call MakeGridGLQ(qru_inv(ix,iy,iz,:,:), cilm2, lmax, plx, csphase=1) 
       qwfr_product = qwf_in(ix,iy,iz,:,:,j)*qru_inv(ix,iy,iz,:,:)

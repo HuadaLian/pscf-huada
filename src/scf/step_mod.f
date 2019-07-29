@@ -63,6 +63,7 @@ module step_mod
    complex(long), allocatable    :: cos_isin_uk2(:,:,:,:,:)   ! (kx,ky,kz,theta,phi) 
    complex(long), allocatable    :: cos_isin_ukr1(:,:,:,:,:)   ! (kx,ky,kz,theta,phi) 
    complex(long), allocatable    :: cos_isin_ukr2(:,:,:,:,:)   ! (kx,ky,kz,theta,phi) 
+
    real(long)   , allocatable    :: exp_cilm(:,:,:) 
    real(long)   , allocatable    :: exp_dif1(:,:,:)             ! (l,m) 
    real(long)   , allocatable    :: exp_dif2(:,:,:)             ! (l,m) 
@@ -249,9 +250,9 @@ contains
    qru = expw_omega1*qwf_in 
    call fft_many(plan_many, qru, qku) 
    if (dir==-1) then 
-      qku = cos_isin_ukr1*qku  
-   elseif (dir==1) then 
-      qku = cos_isin_uk1*qku 
+      qku = cos_isin_ukr1*qku
+   elseif (dir==1) then
+   qku = cos_isin_uk1 *qku 
    endif
    call ifft_many(plan_many, qku, qru) 
    qru = qru/r_npoints 
@@ -266,9 +267,9 @@ contains
    enddo
    call fft_many(plan_many, qru, qku) 
    if (dir==-1) then 
-      qku = cos_isin_ukr1*qku  
-   elseif (dir==1) then 
-      qku = cos_isin_uk1*qku 
+      qku = cos_isin_ukr1*qku
+   elseif (dir==1) then
+   qku = cos_isin_uk1 *qku 
    endif
    call ifft_many(plan_many, qku, qu1) 
    qu1 = qu1 / r_npoints 
@@ -278,10 +279,11 @@ contains
    qru = expw_omega2*qwf_in  
    call fft_many(plan_many, qru, qku) 
    if (dir==-1) then 
-      qku = cos_isin_ukr2*qku  
-   elseif (dir==1) then 
-      qku = cos_isin_uk2*qku 
+      qku = cos_isin_ukr2*qku
+   elseif (dir==1) then
+   qku = cos_isin_uk2 *qku 
    endif
+
    call ifft_many(plan_many, qku, qru) 
    qru = qru / r_npoints 
    do i=0,ngrid(1)-1 
@@ -295,9 +297,9 @@ contains
    enddo
    call fft_many(plan_many, qru, qku) 
    if (dir==-1) then 
-      qku = cos_isin_ukr2*qku  
-   elseif (dir==1) then 
-      qku = cos_isin_uk2*qku 
+      qku = cos_isin_ukr2*qku
+   elseif (dir==1) then
+   qku = cos_isin_uk2 *qku 
    endif
    call ifft_many(plan_many, qku, qru) 
    qru = qru / r_npoints 
@@ -306,9 +308,9 @@ contains
    qru = expw_omega2*qru  
    call fft_many(plan_many, qru, qku) 
    if (dir==-1) then 
-      qku = cos_isin_ukr2*qku  
-   elseif (dir==1) then 
-      qku = cos_isin_uk2*qku 
+      qku = cos_isin_ukr2*qku
+   elseif (dir==1) then
+   qku = cos_isin_uk2 *qku 
    endif
    call ifft_many(plan_many, qku, qru) 
    qru = qru / r_npoints 
@@ -323,9 +325,9 @@ contains
    enddo
    call fft_many(plan_many, qru, qku) 
    if (dir==-1) then 
-      qku = cos_isin_ukr2*qku  
-   elseif (dir==1) then 
-      qku = cos_isin_uk2*qku 
+      qku = cos_isin_ukr2*qku
+   elseif (dir==1) then
+   qku = cos_isin_uk2 *qku 
    endif
    call ifft_many(plan_many, qku, qu2) 
    qu2 = qu2 / r_npoints 
@@ -438,11 +440,11 @@ contains
       ! Advection term 
       adv_coeff   = ds / 2.0_long 
       cos_isin_uk1 = cos( adv_coeff * uk)+ cmplx(0.0_long,1.0_long) * sin( adv_coeff * uk)
-      cos_isin_ukr1= cos(-adv_coeff * uk)+ cmplx(0.0_long,1.0_long) * sin(-adv_coeff * uk)
+      cos_isin_ukr1 = cos(-adv_coeff * uk)+ cmplx(0.0_long,1.0_long) * sin(-adv_coeff * uk)
 
       adv_coeff   = (ds / 2.0_long) / 2.0_long  
       cos_isin_uk2 = cos( adv_coeff * uk)+ cmplx(0.0_long,1.0_long) * sin( adv_coeff * uk)
-      cos_isin_ukr2= cos(-adv_coeff * uk)+ cmplx(0.0_long,1.0_long) * sin(-adv_coeff * uk)
+      cos_isin_ukr2 = cos(-adv_coeff * uk)+ cmplx(0.0_long,1.0_long) * sin(-adv_coeff * uk)
 
       ! Diffusion term 
       dif_coeff   = ds/b  
