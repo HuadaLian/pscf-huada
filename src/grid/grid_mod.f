@@ -18,9 +18,10 @@
 !-----------------------------------------------------------------------
 module grid_mod
    use const_mod
-   use SHTOOLS 
    use io_mod
    use chemistry_mod
+   use kronrod_mod 
+   !use string_mod
    implicit none
 
    private
@@ -28,16 +29,19 @@ module grid_mod
    ! Public data structures
    public :: ngrid          ! dimensions ngrid(:)=(N1,N2,N3) of grid
    public :: chain_step     ! step size chain_step(:Nblock, :Nchain) 
-   public :: lmax           ! = max level of spherical harmonics l
-   public :: N_sph          ! (lmax+1)^2 
+   public :: lbar           ! = max level of spherical harmonics l
+   public :: N_sph          ! # of spherical harmonics 
+   public :: angularf_grid  ! position and weights of orientation dimension (forward)                
+   public :: angularr_grid  ! position and weights of orientation dimension (reversed)              
+   public :: Rjj            ! Auxilliary maxtrix for wormlike block 
+   public :: Yjf            ! Auxilliary maxtrix for wormlike block 
+   public :: Yjr            ! Auxilliary maxtrix for wormlike block 
+   public :: Yjfinv            ! Auxilliary maxtrix for wormlike block 
+   public :: Yjrinv            ! Auxilliary maxtrix for wormlike block 
 
    public :: rho_grid       ! rho on r-grid   (r,N_monomer)
    public :: omega_grid     ! omega on r-grid (r,N_monomer)
    public :: ksq_grid       ! k**2 on k-grid 
-
-   public :: zero           ! nodes on cos(theta)
-   public :: weight         ! Gauss-Legendre weight 
-   public :: plx            ! Legendre values 
 
    ! Public procedures
    public :: input_grid
@@ -51,21 +55,23 @@ module grid_mod
    public :: G_to_bz
    public :: Greal_to_bz
    public :: norm
-   public :: GL_integrate 
 
    integer                  :: ngrid(3)
    real(long), ALLOCATABLE  :: chain_step(:,:) 
-   integer                  :: lmax 
+   integer                  :: lbar 
    integer                  :: N_sph 
+   real(long), ALLOCATABLE  :: angularf_grid(:,:)     ! angularf_grid(1:3(theta,phi,weight),2n+1=(lbar+1)**2)
+   real(long), ALLOCATABLE  :: angularr_grid(:,:)     ! angularr_grid(1:3(theta,phi,weight),2n+1=(lbar+1)**2)
+
+   real(long), ALLOCATABLE  :: Rjj(:,:,:)            ! Rjj(1:3,0:N_sph-1,0:N_sph-1) 
+   real(long), ALLOCATABLE  :: Yjf(:,:)            ! Yj(0:N_sph-1,0:N_sph-1) 
+   real(long), ALLOCATABLE  :: Yjr(:,:)            ! Yj(0:N_sph-1,0:N_sph-1) 
+   real(long), ALLOCATABLE  :: Yjfinv(:,:)            ! Yj(0:N_sph-1,0:N_sph-1) 
+   real(long), ALLOCATABLE  :: Yjrinv(:,:)            ! Yj(0:N_sph-1,0:N_sph-1) 
 
    real(long), ALLOCATABLE  :: rho_grid(:,:,:,:)
    real(long), ALLOCATABLE  :: omega_grid(:,:,:,:)
    real(long), ALLOCATABLE  :: ksq_grid(:,:,:)
-
-   real(long), ALLOCATABLE  :: zero(:) 
-   real(long), ALLOCATABLE  :: weight(:) 
-   real(long), ALLOCATABLE  :: plx(:,:) 
-
    !***
 
    !---------------------------------------------------------------
@@ -104,21 +110,96 @@ contains
    ! SOURCE
    !---------------------------------------------------------------
    subroutine input_grid
+   !***
    use io_mod, only : input
 
-   ! grid of spatial space 
    call input(ngrid(:),dim,f='A')
    if (dim < 3) then
       ngrid(dim+1:3) = 1
    end if
 
-   ! grid of orientational space 
-   call input(lmax,'lmax')
+   call input(lbar,'lbar')
 
-   N_sph = (lmax+1)**2 
-      
+   N_sph = (lbar+1)**2
+   call set_angular_grid(lbar/2)
+
    end subroutine input_grid
    !==============================================================
+
+   ! create the disretization of orientation dimension (theta,phi)  
+   subroutine set_angular_grid(n)
+      implicit none 
+      integer, intent(IN) :: n
+      real(long) :: eps=0.000001D+00
+      real(long) :: x(n+1)    ! Kronrod abscissas half of(-1,1) 
+      real(long) :: w1(n+1)   ! Gauss weights 
+      real(long) :: w2(n+1)   ! Kronrod weights half of (-1,1)
+
+      integer :: j            ! looping variable 
+      integer :: k, k2, l, l2 ! looping variable and local index 
+      integer :: s                ! sign +1 or -1 
+      integer :: error 
+      real(long) :: twopi     ! const 2pi
+      !*** 
+
+      twopi = 4.0_long*acos(0.0_long) 
+
+      if (lbar - 2*n .GT. 0) stop 'lbar had better to be an even number.'
+
+      ALLOCATE(angularf_grid(1:3, 0:N_sph-1), STAT=error) 
+      if (error/=0) stop 'Allocating angularf_grid is in trouble.'
+      ALLOCATE(angularr_grid(1:3, 0:N_sph-1), STAT=error) 
+      if (error/=0) stop 'Allocating angularr_grid is in trouble.'
+
+      ! calculate the kronrod abscissas on (-1,1), only the (1,0) part is stored. 
+      ! x  => abscissas 
+      ! w1 => weights 
+      call kronrod(n, eps, x, w1, w2) 
+
+      ! translate the abscissas on (-1,1) to (0,pi) and (0,2pi) respectively 
+      ! the weights should be multiplied by pi/2.0 and 2*pi/2.0 respectively 
+      ! weights also contains the sin(theta) part for the S2 integral 
+      angularf_grid = 1.0_long 
+      angularr_grid = 1.0_long 
+      j = 0  
+      do k= 1, 2*n+1 
+         do l = 1, 2*n+1 
+            s = 1 
+            if (k .LE. n+1) then 
+               s = (-1) * s 
+               k2 = k 
+            elseif (k .GT. n+1) then
+               s =  1 * s 
+               k2 = 2*(n+1) - k 
+            endif 
+            angularf_grid(1,j) = (s * x(k2) + 1.0_long)/2.0_long*(twopi/2.0_long)
+            angularr_grid(1,j) = (twopi/2.0_long)-(s * x(k2) + 1.0_long)/2.0_long * (twopi/2.0_long)
+
+            angularf_grid(3,j) = angularf_grid(3,j)*sin(angularf_grid(1,j))*w1(k2) /2.0_long * (twopi/2.0_long)
+            angularr_grid(3,j) = angularr_grid(3,j)*sin(angularr_grid(1,j))*w1(k2) /2.0_long * (twopi/2.0_long)
+
+            s = 1 
+            if (l .LE. n+1) then 
+               s = (-1) * s 
+               l2 = l 
+            elseif (l .GT. n+1) then
+               s =  1 * s 
+               l2 = 2*(n+1) - l 
+            endif 
+            angularf_grid(2,j) = (s * x(l2) + 1.0_long)/2.0_long * twopi
+            angularr_grid(2,j) = (twopi/2.0_long)+(s * x(l2) + 1.0_long)/2.0_long * (twopi)
+            if (angularr_grid(2,j) > (4.0_long*acos(0.0_long))) then 
+               angularr_grid(2,j) = angularr_grid(2,j) - twopi
+            endif
+
+            angularf_grid(3,j) = angularf_grid(3,j)*w1(l2) /2.0_long * (twopi) 
+            angularr_grid(3,j) = angularr_grid(3,j)*w1(l2) /2.0_long * (twopi) 
+
+            j = j + 1 
+         enddo 
+      enddo 
+       
+   end subroutine set_angular_grid
 
 
 
@@ -255,17 +336,6 @@ contains
 
    ALLOCATE(ksq_grid(0:(nx+1)/2,0:ny,0:nz),STAT=error)
    if (error /= 0) stop "rho_grid allocation error!"
-
-   ALLOCATE(zero(0:lmax),STAT=error)
-   if (error /= 0) stop "zero allocation error!"
-
-   ALLOCATE(weight(0:lmax),STAT=error)
-   if (error /= 0) stop "weight allocation error!"
-
-   ALLOCATE(plx(0:lmax,0:(lmax+1)*(lmax+2)/2-1),STAT=error)
-   if (error /= 0) stop "plx allocation error!"
-
-   call SHGLQ(lmax, zero, weight, plx, norm=1, csphase=1) 
 
    end subroutine allocate_grid
    !==============================================================
@@ -556,37 +626,5 @@ contains
    end function norm
    !=================================================================
 
-   !--------------------------------------------------------------
-   !****p  grid_mod/GL_integrate 
-   ! SUBROUTINE
-   !   GL_integrate(gridglq)
-   ! PURPOSE
-   !   Integrate on surface of sphere in 3D space 
-   !   by Gauss-Legendre quadrature.  
-   ! SOURCE
-   !--------------------------------------------------------------
-   function GL_integrate(gridglq,w) 
-   implicit none 
-   real(long)             :: GL_integrate
-   real(long),intent(IN)  :: gridglq(0:lmax, 0:2*lmax)  
-   real(long),intent(IN)  :: w(0:lmax) 
-   
-   !*** 
-   real(long)             :: sin_theta(0:lmax)  
-   integer                :: l,m !looping variables 
-
-   do l=0,lmax 
-      sin_theta(l) = sin((zero(l)+1.0)*acos(0.0_long))
-   enddo
-
-   GL_integrate = 0.0_long 
-
-   do m=0,2*lmax,1
-      GL_integrate = GL_integrate + sum(gridglq(:,m)*sin_theta*w)*acos(0.0_long)  
-   enddo 
-
-   GL_integrate = GL_integrate * acos(0.0_long)*4.0/(2*lmax+1) 
-
-   end function GL_integrate 
 
 end module grid_mod

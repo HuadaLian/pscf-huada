@@ -78,8 +78,11 @@ module step_mod
 
 
    !Auxilliary array for Wormlike chain
-   real(long), allocatable :: glqf(:,:)           ! Gauss-Legendre quadrature (theta,phi,weight)               
-   real(long), allocatable :: glqr(:,:)           ! Gauss-Legendre quadrature (theta,phi,weight)
+   !real(long), allocatable :: Yjf(:,:)              ! 2D - real spherical harmonics on orientation grid u 
+   !real(long), allocatable :: Yjr(:,:)              ! 2D - real spherical harmonics on orientation grid u 
+
+   !real(long), allocatable :: Yjfinv(:,:)           ! inverse of Yjf 
+   !real(long), allocatable :: Yjrinv(:,:)           ! inverse of Yjr 
 
    complex, allocatable :: Gkf(:,:,:,:,:,:)       ! For euler method 
    complex, allocatable :: Gkr(:,:,:,:,:,:)       ! For euler method 
@@ -223,13 +226,41 @@ contains
       ALLOCATE(j_index(1:2, 0:N_sph-1), STAT=error)
       if (error /= 0) stop "j_index allocation error"
       i = 0 
-      do l = 0, lmax
+      do l = 0, lbar
          do m = -l, l 
             j_index(:,i) = (/ l, m /)
             i = i + 1
          enddo
       enddo 
  
+      ! initialization Yj(u,j) in accordance to gauss-kronrod grid  
+
+      !ALLOCATE(p((lbar+1)*(lbar+2)/2), STAT=error)
+      !if (error /= 0) stop "Legendre polynomials allocation error"
+      !
+      !twopi = 4.0_long*acos(0.0_long)
+      !do i = 0, N_sph-1 
+      !   z       = angularf_grid(1,i)
+      !   call PlmBar(p, lbar, cos(z)) 
+      !   do k = 0, N_sph-1
+      !      l = j_index(1,k)
+      !      m = j_index(2,k)
+      !      if (m .GE. 0) then 
+      !         index=PlmIndex(l,  m) 
+      !         mphi = cos(m*angularf_grid(2,i))/(sqrt(2.0_long*twopi)) 
+      !      else
+      !         index=PlmIndex(l, -m) 
+      !         mphi = sin(-m*angularf_grid(2,i))/(sqrt(2.0_long*twopi))
+      !      endif 
+      !      Yjf(k,i) = p(index)*mphi
+      !      Yjr(k,i) =-p(index)*mphi 
+      !   enddo
+
+      !enddo
+
+      !Yjfinv = inverse(Yjf,N_sph) 
+      !Yjrinv = -1.0_long*Yjfinv  
+
       ALLOCATE(Gkf(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1,0:N_sph-1,1:N_worm_blk_max), STAT=error)
       if (error /= 0) stop "Gk allocation error"
       ALLOCATE(Gkr(0:n(1)-1,0:n(2)-1,0:n(3)-1,0:N_sph-1,0:N_sph-1,1:N_worm_blk_max), STAT=error)
@@ -264,106 +295,21 @@ contains
          !----------------------------------------------------------------
          subroutine make_Gk_matrix()
             use unit_cell_mod, only : G_basis
-            integer       :: index_worm, k, i  
-            integer       :: l,m,lp,mp                ! (l,m) index of spherical harmonics           
-            integer       :: j,jp                     ! abbreviated index of spherical harmonics             
+            integer   :: index_worm, k, i  
+            !*** 
+
+            integer       :: l,m                      ! (l,m) index of spherical harmonics           
+            integer       :: j,jp                     ! index of spherical harmonics             
             integer       :: n1,n2,n3                 ! looping variables on k-grid
             integer       :: G(3), Gbz(3)             ! waves in FBZ
             real(long)    :: G_basis_local(3,3)       ! G_basis_copy
             real(long)    :: G_bz_wave(3)
-
+            real(long)    :: rjj_element(3)                   ! element of Rjj 
             real(long)    :: deltajj                  ! deltajj=1 when j=j'
             real(long)    :: h                        ! stepsize 
             real(long)    :: monomer_size             ! kuhn monomer size
             complex(long) :: Gjjinv(0:N_sph-1,0:N_sph-1)  ! local variable to store inverse of Gjj(k)                    
 
-            real(long)    :: uint(3,0:lmax, 0:2*lmax) 
-            real(long)    :: Rjj(1:3,0:N_sph-1,0:N_sph-1), rjj_element(3) ! element of Rjj 
-            real(long)    :: twopi 
-            integer       :: u_to_lm(0:lmax,0:lmax)  
-            integer       :: lm_to_j(1:2,0:N_sph-1)  
-            integer       :: u,up  
-            real(long)    :: node_theta(0:lmax) ! node on theta axis
-            real(long)    :: node_phi(0:2*lmax) ! node on phi   axis
-
-
-            ! Construction of Rjj matrix  
-            twopi = acos(0.0_long)*4.0_long 
-             
-            ! Indices matrix between (l,m) to abbreviation j and n  
-            j = 0 
-            do l = 0, lmax
-            do m = -l, l
-               lm_to_j(:,j) = (/l,m/) 
-               j = j + 1 
-            enddo 
-            enddo 
-
-            u = 0
-            u_to_lm = 0 
-            do l = 0, lmax 
-            do m = 0, l 
-               u_to_lm(l,m) = u 
-               u = u + 1
-            enddo
-            enddo
-               
-            do l = 0, lmax 
-               node_theta(l) = acos(zero(l)) 
-            enddo 
-            do m = 0, 2*lmax
-               node_phi(m) = m*twopi/(2*lmax+1) 
-            enddo 
-
-            ! Creat Rjj matrix element by element. 
-            do j  = 0, N_sph-1 
-               l  = lm_to_j(1,j) 
-               m  = lm_to_j(2,j) 
-            do jp = 0, N_sph-1 
-               lp = lm_to_j(1,jp) 
-               mp = lm_to_j(2,jp) 
-                
-               uint = 0.0_long 
-
-               u  = u_to_lm(l ,abs(m) ) 
-               up = u_to_lm(lp,abs(mp))
-               do n1 = 0, lmax  
-               do n2 = 0, 2*lmax 
-                  uint(:,n1,n2) = plx(n1,u)*plx(n1,up)*weight(n1) 
-                  if (m<0) then
-                     uint(:,n1,n2) = uint(:,n1,n2)*sin(abs(m)*node_phi(n2))
-                  elseif (m .GE. 0) then
-                     uint(:,n1,n2) = uint(:,n1,n2)*cos(m*node_phi(n2))
-                  endif
-
-                  if (mp<0) then
-                     uint(:,n1,n2) = uint(:,n1,n2)*sin(abs(mp)*node_phi(n2))
-                  elseif (mp .GE. 0) then
-                     uint(:,n1,n2) = uint(:,n1,n2)*cos(mp*node_phi(n2))
-                  endif
-
-                  uint(1,n1,n2) = uint(1,n1,n2)&
-                                *sin(node_theta(n1))*cos(node_phi(n2))
-                  uint(2,n1,n2) = uint(2,n1,n2)&
-                                *sin(node_theta(n1))*sin(node_phi(n2))
-                  uint(3,n1,n2) = uint(3,n1,n2)&
-                                *cos(node_theta(n1))
-               enddo 
-               enddo
-
-               Rjj(:,j,jp) = (/ sum(uint(1,:,:)),&
-                                sum(uint(2,:,:)),& 
-                                sum(uint(3,:,:)) /)
-               Rjj(:,j,jp) = Rjj(:,j,jp)*(twopi/(2*lmax+1))/(2*twopi)
-
-               do k = 1, 3
-                  if (abs(Rjj(k,j,jp)) < 10**(-10)) then 
-                     Rjj(k,j,jp) = 0.0_long 
-                  endif
-               enddo 
-               
-            enddo 
-            enddo 
 
             G_basis_local = 0.0 
             select case (dim) 
@@ -437,18 +383,18 @@ contains
 
                                  Gkf(n1,n2,n3,j,jp,index_worm)      = cmplx(                              &
                                     deltajj-h*l*(l+1.0_long)*chain_length(i)/monomer_size*deltajj,     &           ! real part 
-                                    -h*chain_length(i)*dot_product(rjj_element,G_bz_wave) )  !imaginary part  
+                                    +h*chain_length(i)*dot_product(rjj_element,G_bz_wave) )  !imaginary part  
                                  Gkr(n1,n2,n3,j,jp,index_worm)      = cmplx(                              &
                                     deltajj-h*l*(l+1.0_long)*chain_length(i)/monomer_size*deltajj,     &           ! real part 
-                                    +h*chain_length(i)*dot_product(rjj_element,G_bz_wave)   )  !imaginary part  
+                                    -h*chain_length(i)*dot_product(rjj_element,G_bz_wave)   )  !imaginary part  
 
                                  Gkfhalfs(n1,n2,n3,j,jp,index_worm)      = cmplx(                             &
                                     deltajj-h/2.0_long*l*(l+1.0_long)*chain_length(i)/monomer_size*deltajj,&                  !real part 
-                                    -h/2.0_long*chain_length(i)*dot_product(rjj_element,G_bz_wave)        )  !imaginary part
+                                    +h/2.0_long*chain_length(i)*dot_product(rjj_element,G_bz_wave)        )  !imaginary part
 
                                  Gkrhalfs(n1,n2,n3,j,jp,index_worm)      = cmplx(                             &
                                     deltajj-h/2.0_long*l*(l+1.0_long)*chain_length(i)/monomer_size*deltajj,&                  !real part 
-                                    +h/2.0_long*chain_length(i)*dot_product(rjj_element,G_bz_wave)        )  !imaginary part
+                                    -h/2.0_long*chain_length(i)*dot_product(rjj_element,G_bz_wave)        )  !imaginary part
                               enddo 
                            enddo 
 
@@ -480,49 +426,40 @@ contains
    subroutine qw_decompose(qw, qwj,dir) 
    implicit none
 
-   real(long), intent(IN)     :: qw(0:,0:,0:,0:,0:)
+   real(long), intent(IN)     :: qw(0:,0:,0:,0:)
    real(long), intent(OUT)    :: qwj(0:,0:,0:,0:)
    integer,    intent(IN)     :: dir 
 
-   real(long)                 :: cilm(2,0:lmax,0:lmax)
-   real(long)                 :: cilm2(2,0:lmax, 0:lmax) 
-   real(long)                 :: eulerAngles(3)
-   real(long)                 :: dj(0:lmax, 0:lmax, 0:lmax) 
-   integer                    :: i,j,k,l,m,n   !looping variables 
+   integer                    :: i,j,k,l   !looping variables 
    !***
 
-   cilm = 0.0_long 
-
-   do i=0,ngrid(1)-1
-   do j=0,ngrid(2)-1
-   do k=0,ngrid(3)-1
-      call SHExpandGLQ(cilm,lmax,qw(i,j,k,:,:),weight,plx, csphase=1) 
-!      if (dir == -1 ) then 
-!         eulerAngles = (/acos(0.0_long),-acos(0.0_long), acos(0.0_long) /)  ! transform (1,1,1) to (-1,-1,-1)                          
-!
-!         call djpi2(dj, lmax) 
-!         call SHRotateRealCoef(cilm2, cilm, lmax, eulerAngles,dj)    
-!      elseif (dir == 1) then
-!         cilm2 = cilm 
-!      else
-!         stop 'Integrating in a wrong direction.'
-!      endif 
-
-      n = 0 
-      do l=0,lmax
-      do m=-l,l 
-         if (m < 0) then 
-            qwj(i,j,k,n) = cilm(2,l,-m)  
-         elseif (m .GE. 0) then 
-            qwj(i,j,k,n) = cilm(1,l,m) 
-         endif 
-         n = n + 1 
+   if (dir == 1) then 
+      !$OMP PARALLEL DO COLLAPSE(4)
+      do i=0,ngrid(1)-1
+      do j=0,ngrid(2)-1
+      do k=0,ngrid(3)-1
+      do l=0,N_sph-1
+         qwj(i,j,k,l) = Yjfinv(l,:).dot.qw(i,j,k,:)
+      enddo
+      enddo
+      enddo
       enddo 
+      !$OMP END PARALLEL DO 
+   elseif (dir == -1) then
+      !$OMP PARALLEL DO COLLAPSE(4)
+      do i=0,ngrid(1)-1
+      do j=0,ngrid(2)-1
+      do k=0,ngrid(3)-1
+      do l=0,N_sph-1
+         qwj(i,j,k,l) = Yjrinv(l,:).dot.qw(i,j,k,:)
+      enddo
+      enddo
+      enddo
       enddo 
-   enddo 
-   enddo 
-   enddo 
-
+      !$OMP END PARALLEL DO 
+   else
+      stop 'wrong dir in qw_decompose'
+   endif
 
    end subroutine qw_decompose
 
@@ -543,45 +480,38 @@ contains
    implicit none
 
    real(long), intent(IN)     :: qwj(0:,0:,0:,0:)
-   real(long), intent(OUT)    :: qw(0:,0:,0:,0:,0:)
-   integer   , intent(IN)     :: dir 
+   real(long), intent(OUT)    :: qw(0:,0:,0:,0:)
+   integer,    intent(IN)     :: dir 
 
-   real(long)                 :: cilm(2,0:lmax,0:lmax)
-   real(long)                 :: cilm2(2,0:lmax,0:lmax) 
-   real(long)                 :: eulerAngles(3) 
-   real(long)                 :: dj(0:lmax,0:lmax,0:lmax)  
-   integer                    :: i,j,k,l,m,n   !looping variables 
+   integer                    :: i,j,k,l   !looping variables 
    !***
-
-   do i=0,ngrid(1)-1
-   do j=0,ngrid(2)-1
-   do k=0,ngrid(3)-1
-
-      cilm = 0.0_long 
-      do l=0,lmax
-      do m=-l,l
-         if (m < 0) then 
-            cilm(2,l,-m) = qwj(i,j,k,l**2+l+m) 
-         elseif (m .GE. 0) then
-            cilm(1,l, m) = qwj(i,j,k,l**2+l+m) 
-         endif 
+   if (dir == 1) then 
+      !$OMP PARALLEL DO COLLAPSE(4)
+      do i=0,ngrid(1)-1
+      do j=0,ngrid(2)-1
+      do k=0,ngrid(3)-1
+      do l=0,N_sph-1
+         qw(i,j,k,l) = dot_product(Yjf(l,:),qwj(i,j,k,:))
       enddo
       enddo
-
-      if (dir == -1) then 
-         call djpi2(dj,lmax)  
-         call SHRotateRealCoef(cilm2, cilm, lmax, eulerAngles, dj) 
-      elseif (dir == 1) then
-         cilm2 = cilm
-      else
-         stop 'Integrating in a wrong direction.' 
-      endif
-
-      call MakeGridGLQ( qw(i,j,k,:,:), cilm2, lmax, plx, csphase=1)  
-
-   enddo
-   enddo
-   enddo
+      enddo
+      enddo 
+      !$OMP END PARALLEL DO 
+   elseif (dir == -1) then 
+      !$OMP PARALLEL DO COLLAPSE(4)
+      do i=0,ngrid(1)-1
+      do j=0,ngrid(2)-1
+      do k=0,ngrid(3)-1
+      do l=0,N_sph-1
+         qw(i,j,k,l) = dot_product(Yjr(l,:),qwj(i,j,k,:))
+      enddo
+      enddo
+      enddo
+      enddo 
+      !$OMP END PARALLEL DO 
+   else
+      stop 'wrong dir in qw_sum '
+   endif
 
    end subroutine qw_sum
 
@@ -603,7 +533,7 @@ contains
    real(long), intent(IN)     :: qwj_in(0:,0:,0:,0:)  
    real(long), intent(OUT)    :: qwj_out(0:,0:,0:,0:) 
 
-   real(long), intent(OUT)    :: qwf_out(0:,0:,0:,0:,0:) 
+   real(long), intent(OUT)    :: qwf_out(0:,0:,0:,0:) 
 
    type(fft_plan_many), intent(IN) :: plan_many
    integer,    intent(IN)     :: dir 
@@ -640,7 +570,7 @@ contains
    ! half step size 
    !$OMP PARALLEL
    do l=0,N_sph-1
-      omegaqwr(:,:,:,l) = -1.0_long*ds_blk_local/2.0_long * omega_local * qwj2(:,:,:,l)
+      omegaqwr(:,:,:,l) = -1.0_long*ds_blk_local/2.0_long * omega_local * qwj2(:,:,:,l)        ! (- or + )ds/2*omega(r)*qwj(r,s) 
    enddo
    !$OMP END PARALLEL 
    call fft(plan_many, omegaqwr, omegaqwk) 
@@ -713,7 +643,7 @@ contains
    real(long), intent(IN)     :: qwj1h_in(0:,0:,0:,0:)  
 
    real(long), intent(OUT)    :: qwj_out(0:,0:,0:,0:) 
-   real(long), intent(OUT)    :: qwf_out(0:,0:,0:,0:,0:) 
+   real(long), intent(OUT)    :: qwf_out(0:,0:,0:,0:) 
 
    type(fft_plan_many), intent(IN) :: plan_many
    integer,    intent(IN)     :: dir 

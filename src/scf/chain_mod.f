@@ -45,8 +45,8 @@ module chain_mod
       real(long), pointer     :: qf(:,:,:,:)        ! function qf(x,y,z,s) 
       real(long), pointer     :: qr(:,:,:,:)        ! function qr(x,y,z,s) 
       real(long), pointer     :: rho(:,:,:,:)       ! rho(x,y,z,nblk)
-      real(long), pointer     :: qwf(:,:,:,:,:,:)   ! qwf(x,y,z,theta,phi,s)
-      real(long), pointer     :: qwr(:,:,:,:,:,:)   ! qwr(x,y,z,theta,phi,s)
+      real(long), pointer     :: qwf(:,:,:,:,:)   ! qwf(x,y,z,g,s)
+      real(long), pointer     :: qwr(:,:,:,:,:)   ! qwr(x,y,z,g,s)
       real(long), pointer     :: qwj(:,:,:,:,:)     ! function qwj(x,y,z,j,s)
       type(fft_plan)          :: plan               ! fft plan, see fft_mod
       type(fft_plan_many)     :: plan_many          ! fft plan_many, see fft_mod
@@ -121,7 +121,7 @@ contains
    integer               :: iblk               ! index to block
    integer               :: bgnsGaus           ! index of beginers for Gaussian block
    integer               :: bgnsWorm           ! index of beginers for Wormlike block
-   integer               :: nx,ny,nz,nt,np,i   ! loop indices
+   integer               :: nx,ny,nz,nt,i   ! loop indices
 
    integer               :: error              ! allocation error-message
 
@@ -140,8 +140,7 @@ contains
    ny=plan%n(2)-1
    nz=plan%n(3)-1
    if (chain%block_exist(2)) then
-      nt = lmax
-      np = 2*lmax 
+      nt = N_sph -1
    endif
    chain%plan=plan
 
@@ -211,13 +210,13 @@ contains
    end if
 
    if ( chain%block_exist(2) ) then
-      allocate(chain%qwf(0:nx,0:ny,0:nz,0:nt,0:np,1:bgnsWorm),STAT=error)
+      allocate(chain%qwf(0:nx,0:ny,0:nz,0:nt,1:bgnsWorm),STAT=error)
       if (error /= 0) stop "chain%qwf allocation error!"
 
-      allocate(chain%qwr(0:nx,0:ny,0:nz,0:nt,0:np,1:bgnsWorm),STAT=error)
+      allocate(chain%qwr(0:nx,0:ny,0:nz,0:nt,1:bgnsWorm),STAT=error)
       if (error /= 0) stop "chain%qwr allocation error!"
 
-      allocate(chain%qwj(0:nx,0:ny,0:nz,0:N_sph-1,1:bgnsWorm),STAT=error)
+      allocate(chain%qwj(0:nx,0:ny,0:nz,0:nt,1:bgnsWorm),STAT=error)
       if (error /= 0) stop "chain%qwr allocation error!"
 
       call create_fft_plan(plan%n, N_sph, chain%plan_many) 

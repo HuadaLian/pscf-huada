@@ -66,10 +66,9 @@ module scf_mod
    integer                                    :: extrap_order
 
    real(long),allocatable :: q0(:,:,:)      ! temp storage of 0th step for Gaussian block 
-   real(long),allocatable :: qr0(:,:,:)    ! temp storage 
-
    real(long),allocatable :: qwj0(:,:,:,:)  ! temp storage of 0th step for wormlike block
-   real(long),allocatable :: qw0(:,:,:,:,:)   ! temp storage of 0th step for wormlike block          
+   real(long),allocatable :: qw0(:,:,:,:)   ! temp storage of 0th step for wormlike block          
+   real(long), allocatable :: qr0(:,:,:)    ! temp storage 
 
    !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
    ! Generic Interfaces
@@ -132,7 +131,7 @@ contains
 
 
    if (.NOT. allocated(qw0) ) then
-      allocate(qw0(0:N_grids(1)-1,0:N_grids(2)-1,0:N_grids(3)-1,0:lmax,0:2*lmax),STAT=error)
+      allocate(qw0(0:N_grids(1)-1,0:N_grids(2)-1,0:N_grids(3)-1,0:N_sph-1),STAT=error)
       if(error /= 0) STOP "q0 allocation error in scf_mod/density_startup"
       allocate(qwj0(0:N_grids(1)-1,0:N_grids(2)-1,0:N_grids(3)-1,0:N_sph-1),STAT=error)
       if(error /= 0) STOP "q0 allocation error in scf_mod/density_startup"
@@ -388,8 +387,8 @@ contains
    case ('Gaussian')
       chain%qf(:,:,:,1) = 1.0_long 
    case ('Wormlike')
-      chain%qwf(:,:,:,:,:,1) = 1.0_long 
-      call qw_decompose(chain%qwf(:,:,:,:,:,1),chain%qwj(:,:,:,:,1),1)
+      chain%qwf(:,:,:,:,1) = 1.0_long 
+      call qw_decompose(chain%qwf(:,:,:,:,1),chain%qwj(:,:,:,:,1),1)
    case default
       stop 'Invalid type of block' 
    end select
@@ -415,12 +414,10 @@ contains
          if (i_blk < N_block(i_chain)) then
             next_blk_type = block_type(i_blk+1,i_chain) 
             if (next_blk_type=='Wormlike') then 
-               do l=0,lmax 
-               do m=0,2*lmax 
-                  chain%qwf(:,:,:,l,m,chain%block_bgn_lst(1,i_blk+1)) = chain%qf(:,:,:,lst) 
+               do l=0,N_sph-1
+                  chain%qwf(:,:,:,l,chain%block_bgn_lst(1,i_blk+1)) = chain%qf(:,:,:,lst) 
                enddo 
-               enddo
-               call qw_decompose(chain%qwf(:,:,:,:,:,chain%block_bgn_lst(1,i_blk+1)),&
+               call qw_decompose(chain%qwf(:,:,:,:,chain%block_bgn_lst(1,i_blk+1)),&
                                  chain%qwj(:,:,:,:,chain%block_bgn_lst(1,i_blk+1)),1 )
             else
                chain%qf(:,:,:,chain%block_bgn_lst(1,i_blk+1)) = chain%qf(:,:,:,lst)
@@ -435,7 +432,7 @@ contains
          do istep = 0,1
             call step_wormlike_euler(chain%qwj(:,:,:,:,bgn+istep)  ,  & 
                                      chain%qwj(:,:,:,:,bgn+istep+1),  &
-                                     chain%qwf(:,:,:,:,:,bgn+istep+1),  &
+                                     chain%qwf(:,:,:,:,bgn+istep+1),  &
                                      chain%plan_many,1)
          end do 
          bgn = bgn + 2
@@ -446,7 +443,7 @@ contains
                                     chain%qwj(:,:,:,:,istep-1),  &
                                     chain%qwj(:,:,:,:,istep  ),  &
                                     chain%qwj(:,:,:,:,istep+1),  &
-                                    chain%qwf(:,:,:,:,:,istep+1),  &
+                                    chain%qwf(:,:,:,:,istep+1),  &
                                     chain%plan_many,1) 
          enddo 
 
@@ -458,15 +455,14 @@ contains
                do j=0,ngrid(2)-1
                do k=0,ngrid(3)-1
                chain%qf(i,j,k,chain%block_bgn_lst(1,i_blk+1)) = & 
-                  GL_integrate(chain%qwf(i,j,k,:,:,lst),weight) /(2.0_long*twopi)
-               !integrate 
+                  dot_product(chain%qwf(i,j,k,:,lst),angularf_grid(3,:)) /(2.0_long*twopi)
                enddo 
                enddo 
                enddo 
                !$OMP END PARALLEL DO 
             else 
                chain%qwj(:,:,:,:,chain%block_bgn_lst(1,i_blk+1)) = chain%qwj(:,:,:,:,lst) 
-               chain%qwf(:,:,:,:,:,chain%block_bgn_lst(1,i_blk+1)) = chain%qwf(:,:,:,:,:,lst) 
+               chain%qwf(:,:,:,:,chain%block_bgn_lst(1,i_blk+1)) = chain%qwf(:,:,:,:,lst) 
             endif
          endif
 
@@ -482,8 +478,8 @@ contains
    case ('Gaussian')
       chain%qr(:,:,:,chain_end) = 1.0_long 
    case ('Wormlike')
-      chain%qwr(:,:,:,:,:,chain_end) = 1.0_long 
-      call qw_decompose(chain%qwr(:,:,:,:,:,chain_end),chain%qwj(:,:,:,:,chain_end),-1) 
+      chain%qwr(:,:,:,:,chain_end) = 1.0_long 
+      call qw_decompose(chain%qwr(:,:,:,:,chain_end),chain%qwj(:,:,:,:,chain_end),-1) 
    case default
       stop 'Invalid type of block' 
    end select
@@ -511,7 +507,7 @@ contains
                do j=0,ngrid(2)-1
                do k=0,ngrid(3)-1
                   chain%qr(i,j,k,lst) = &
-                     GL_integrate(chain%qwr(i,j,k,:,:,chain%block_bgn_lst(1,i_blk+1)),weight)/(2.0_long*twopi) 
+                     dot_product(chain%qwr(i,j,k,:,chain%block_bgn_lst(1,i_blk+1)),angularr_grid(3,:))/(2.0_long*twopi) 
                enddo
                enddo
                enddo
@@ -534,16 +530,14 @@ contains
             previous_blk_type = block_type(i_blk+1,i_chain) 
             if(previous_blk_type=='Gaussian') then
                !$OMP PARALLEL DO 
-               do l=0,lmax
-               do m=0,2*lmax 
-               chain%qwr(:,:,:,l,m,lst) = &
+               do l=0,N_sph-1
+               chain%qwr(:,:,:,l,lst) = &
                                 chain%qr(:,:,:,chain%block_bgn_lst(1,i_blk+1))
                enddo 
-               enddo
                !$OMP END PARALLEL DO 
-               call qw_decompose(chain%qwr(:,:,:,:,:,lst),chain%qwj(:,:,:,:,lst),-1)
+               call qw_decompose(chain%qwr(:,:,:,:,lst),chain%qwj(:,:,:,:,lst),-1)
             elseif (previous_blk_type=='Wormlike') then 
-               chain%qwr(:,:,:,:,:,lst) = chain%qwr(:,:,:,:,:,chain%block_bgn_lst(1,i_blk+1))
+               chain%qwr(:,:,:,:,lst) = chain%qwr(:,:,:,:,chain%block_bgn_lst(1,i_blk+1))
                chain%qwj(:,:,:,:,lst) = chain%qwj(:,:,:,:,chain%block_bgn_lst(1,i_blk+1))
 
             endif
@@ -553,7 +547,7 @@ contains
          do istep = 0,1
             call step_wormlike_euler(chain%qwj(:,:,:,:,lst-istep)  ,&
                                      chain%qwj(:,:,:,:,lst-istep-1),&
-                                     chain%qwr(:,:,:,:,:,lst-istep-1),&
+                                     chain%qwr(:,:,:,:,lst-istep-1),&
                                      chain%plan_many,-1)
          end do 
          lst = lst -2 
@@ -564,7 +558,7 @@ contains
                                     chain%qwj(:,:,:,:,istep+1), &
                                     chain%qwj(:,:,:,:,istep  ), &
                                     chain%qwj(:,:,:,:,istep-1), &
-                                    chain%qwr(:,:,:,:,:,istep-1), &
+                                    chain%qwr(:,:,:,:,istep-1), &
                                     chain%plan_many,-1) 
          enddo 
 
@@ -582,7 +576,7 @@ contains
       do i=0,ngrid(1)-1
       do j=0,ngrid(2)-1
       do k=0,ngrid(3)-1
-      q0(i,j,k) = GL_integrate(chain%qwf(i,j,k,:,:,chain_end),weight)
+      q0(i,j,k) = dot_product(chain%qwf(i,j,k,:,chain_end),angularf_grid(3,:) )
       enddo
       enddo
       enddo
@@ -593,6 +587,33 @@ contains
       chain%bigQ = sum(chain%qf(:,:,:,chain_end)) &
           / dble(size(chain%qf(:,:,:,chain_end)))
    endif
+
+
+   !if (chain%block_exist(2)) then 
+   !   ! if wormlike block exist 
+   !   do i_blk = N_block(i_chain),1,-1
+   !      if (block_type(i_blk,i_chain)=='Wormlike') then 
+   !         chain_end = chain%block_bgn_lst(2,i_blk) 
+   !      endif
+   !   enddo
+
+   !   !$OMP PARALLEL DO COLLAPSE(3)
+   !   do i=0,ngrid(1)-1
+   !   do j=0,ngrid(2)-1
+   !   do k=0,ngrid(3)-1
+   !   q0(i,j,k) = dot_product(chain%qwf(i,j,k,:,chain_end),angular_grid(3,:) )
+   !   enddo
+   !   enddo
+   !   enddo
+   !   !$OMP END PARALLEL DO 
+   !   chain%bigQ = sum(q0) / ( 2.0_long*twopi*dble(size(q0)) ) 
+   !else
+   !   chain_end = chain%block_bgn_lst(2,N_block(i_chain)) 
+   !   ! pure gaussian chain  
+   !   chain%bigQ = sum(chain%qf(:,:,:,chain_end)) &
+   !       / dble(size(chain%qf(:,:,:,chain_end)))
+   !endif
+
 
    ! Calculate monomer concentration fields, using Simpson's rule
    ! to evaluate the integral \int ds qr(r,s)*qf(r,s)
@@ -606,7 +627,7 @@ contains
       case ('Gaussian') 
          call rho_field(chain%block_ds(i), chain%qf(:,:,:,ibgn:iend),chain%qr(:,:,:,ibgn:iend),chain%rho(:,:,:,i))               
       case ('Wormlike')
-         call rho_field(chain%block_ds(i), chain%qwf(:,:,:,:,:,ibgn:iend),chain%qwr(:,:,:,:,:,ibgn:iend),chain%rho(:,:,:,i))      
+         call rho_field(chain%block_ds(i), chain%qwf(:,:,:,:,ibgn:iend),chain%qwr(:,:,:,:,ibgn:iend),chain%rho(:,:,:,i))               
       case default
          stop 'Invalid type of block'
       end select 
@@ -702,7 +723,7 @@ contains
                do j=0,ngrid(1)-1
                do k=0,ngrid(2)-1
                do l=0,ngrid(3)-1
-               q0(j,k,l) = GL_integrate(chains(sp_index)%qwf(j,k,l,:,:,i), weight) 
+               q0(j,k,l) = dot_product(chains(sp_index)%qwf(j,k,l,:,i), angularf_grid(3,:)) 
                enddo
                enddo
                enddo
@@ -711,7 +732,7 @@ contains
                do j=0,ngrid(1)-1
                do k=0,ngrid(2)-1
                do l=0,ngrid(3)-1
-               qr0(j,k,l) = GL_integrate(chains(sp_index)%qwr(j,k,l,:,:,i), weight) 
+               qr0(j,k,l) = dot_product(chains(sp_index)%qwr(j,k,l,:,i), angularr_grid(3,:)) 
                enddo
                enddo
                enddo
@@ -1265,39 +1286,40 @@ contains
    subroutine rho_field_wormlike(ds,qwf_in,qwr_in,rho_out)
    implicit none 
    real(long), intent(IN) :: ds 
-   real(long), intent(IN) :: qwf_in(0:,0:,0:,0:,0:,1:) 
-   real(long), intent(IN) :: qwr_in(0:,0:,0:,0:,0:,1:) 
+   real(long), intent(IN) :: qwf_in(0:,0:,0:,0:,1:) 
+   real(long), intent(IN) :: qwr_in(0:,0:,0:,0:,1:) 
    real(long), intent(OUT):: rho_out(0:,0:,0:) 
 
-   integer      :: iz,iy,ix,j,l,m !looping variables 
+   integer      :: iz,iy,ix,j,l !looping variables 
    integer      :: ibgn, iend !index of the first and last segment
    real(long)   :: fourpi
-   real(long)   :: qwfr_product(0:lmax,0:2*lmax) 
+   real(long)   :: qwfr_product(0:N_sph-1) 
    !*** 
 
    fourpi = 2.0_long*4.0_long*acos(0.0_long) 
 
    ibgn = 1                  ! first index 
-   iend = size(qwf_in,6)     ! last  index 
+   iend = size(qwf_in,5)     ! last  index 
 
    rho_out = 0.0_long 
-
+   !$OMP PARALLEL DO collapse(3) private(qwfr_product)
    do iz=0,ngrid(3)-1
    do iy=0,ngrid(2)-1
    do ix=0,ngrid(1)-1
-   qwfr_product = qwf_in(ix,iy,iz,:,:,ibgn)*qwr_in(ix,iy,iz,:,:,ibgn)
-   rho_out(ix,iy,iz)=GL_integrate(qwfr_product,weight) 
+   qwfr_product = qwf_in(ix,iy,iz,:,ibgn)*qwr_in(ix,iy,iz,:,ibgn)
+   rho_out(ix,iy,iz)=dot_product(qwfr_product,angularf_grid(3,:)) 
    end do
    end do
    end do
+   !$OMP END PARALLEL DO 
 
    !$OMP PARALLEL DO collapse(3) private(qwfr_product)
    do iz=0,ngrid(3)-1
    do iy=0,ngrid(2)-1
    do ix=0,ngrid(1)-1
-   qwfr_product = qwf_in(ix,iy,iz,:,:,iend)*qwr_in(ix,iy,iz,:,:,iend)
-   rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
-                        GL_integrate(qwfr_product,weight) 
+      qwfr_product = qwf_in(ix,iy,iz,:,iend)*qwr_in(ix,iy,iz,:,iend)
+      rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
+                        dot_product(qwfr_product,angularf_grid(3,:)) 
    end do
    end do
    end do
@@ -1309,9 +1331,9 @@ contains
       do iz=0,ngrid(3)-1
       do iy=0,ngrid(2)-1
       do ix=0,ngrid(1)-1
-      qwfr_product = qwf_in(ix,iy,iz,:,:,j)*qwr_in(ix,iy,iz,:,:,j)
-      rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
-                           GL_integrate(qwfr_product,weight)*4.0_long
+         qwfr_product = qwf_in(ix,iy,iz,:,j)*qwr_in(ix,iy,iz,:,j)
+         rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
+                           dot_product(qwfr_product,angularf_grid(3,:))*4.0_long 
       end do
       end do
       end do
@@ -1324,9 +1346,9 @@ contains
       do iz=0,ngrid(3)-1
       do iy=0,ngrid(2)-1
       do ix=0,ngrid(1)-1
-      qwfr_product = qwf_in(ix,iy,iz,:,:,j)*qwr_in(ix,iy,iz,:,:,j)
-      rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
-                           GL_integrate(qwfr_product,weight)*2.0_long
+        qwfr_product = qwf_in(ix,iy,iz,:,j)*qwr_in(ix,iy,iz,:,j)
+        rho_out(ix,iy,iz)=rho_out(ix,iy,iz) + &
+                           dot_product(qwfr_product,angularf_grid(3,:))*2.0_long
       end do
       end do
       end do

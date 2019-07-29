@@ -35,6 +35,9 @@ module field_io_mod
 
    private
    public  :: input_field
+   public  :: input_Rmatrix
+   public  :: input_Ymatrix
+   public  :: input_Yinvmatrix
    public  :: output_field
    public  :: output_field_grid
    public  :: output_fields 
@@ -43,6 +46,120 @@ module field_io_mod
 
    integer, parameter :: field_unit = 22 ! omega and rho fields
 contains
+   !-------------------------------------------------------------------
+   !****p field_io_mod/input_Rmatrix
+   ! SUBROUTINE
+   !   input_Rmatrix(Rmatrix,Rmatrix_unit)
+   ! PURPOSE
+   !   Read matrix components from supplied io-unit
+   ! ARGUMENTS
+   !   matrix_file      =  vector array Rjj
+   !
+   !   field_unit =  unit number of file to read (open for reading)
+   ! SOURCE
+   !-------------------------------------------------------------------
+   subroutine input_Rmatrix(matrix,matrix_unit)
+
+   real(long),intent(INOUT) :: matrix(1:,0:,0:)  ! (1;3 ,0:N_sph-1, 0:N_sph-1)
+   integer,intent(IN)       :: matrix_unit
+   !***
+
+   integer            :: i, j                        ! looping varialbes
+   integer            :: l,m,lp,mp                   ! index of harmonics , corresponding Rjj vector value         
+   real(long)         :: rjj(1:3)                    ! vector at R_jj'
+   integer            :: jx_index, jy_index,j_value  ! combined index of (l,m), corresponding value in Rjj                   
+
+   matrix = 0.0_long
+
+   ! 
+   DO
+      read(matrix_unit,*) l,m,lp,mp,rjj
+      jx_index = l**2 + (m +l )
+      jy_index = lp**2 + (mp+lp)
+      if (jx_index > N_sph-1 .OR. jy_index > N_sph-1) then
+         EXIT
+      endif 
+      matrix(1:3,jx_index,jy_index) = (/rjj(1),rjj(2),rjj(3)/)
+      matrix(1:3,jy_index,jx_index) = (/rjj(1),rjj(2),rjj(3)/)
+   END DO
+
+   end subroutine input_Rmatrix
+   !==============================================================
+
+
+   !-------------------------------------------------------------------
+   !****p field_io_mod/input_Ymatrix
+   ! SUBROUTINE
+   !   input_Ymatrix(Ymatrix,Ymatrix_unit)
+   ! PURPOSE
+   !   Read matrix components from supplied io-unit
+   ! ARGUMENTS
+   !   matrix_file      =  vector array Yj(u)
+   !
+   !   field_unit =  unit number of file to read (open for reading)
+   ! SOURCE
+   !-------------------------------------------------------------------
+   subroutine input_Ymatrix(matrixf,matrixr,matrix_unit)
+
+   real(long),intent(INOUT) :: matrixf(0:,0:)  ! (0:N_sph-1, 0:N_sph-1)
+   real(long),intent(INOUT) :: matrixr(0:,0:)  ! (0:N_sph-1, 0:N_sph-1)
+
+   integer,intent(IN)       :: matrix_unit
+   !***
+
+   integer            :: i, j                        ! looping varialbes
+
+   matrixf = 0.0_long
+   matrixr = 0.0_long
+
+   do i=0,N_sph-1
+   do j=0,N_sph-1
+      read(matrix_unit,*) matrixf(j,i)  
+   enddo
+   enddo
+
+   matrixf = matrixf 
+   matrixr = -1.0_long*matrixf
+
+   end subroutine input_Ymatrix
+   !==============================================================
+
+   !-------------------------------------------------------------------
+   !****p field_io_mod/input_Yinvmatrix
+   ! SUBROUTINE
+   !   input_Yinvmatrix(Ymatrix,Ymatrix_unit)
+   ! PURPOSE
+   !   Read matrix components from supplied io-unit
+   ! ARGUMENTS
+   !   matrix_file      =  vector array Yj(u)
+   !
+   !   field_unit =  unit number of file to read (open for reading)
+   ! SOURCE
+   !-------------------------------------------------------------------
+   subroutine input_Yinvmatrix(matrixif,matrixir,matrix_unit)
+
+   real(long),intent(INOUT) :: matrixif(0:,0:)  ! (0:N_sph-1, 0:N_sph-1)
+   real(long),intent(INOUT) :: matrixir(0:,0:)  ! (0:N_sph-1, 0:N_sph-1)
+
+   integer,intent(IN)       :: matrix_unit
+   !***
+
+   integer            :: i, j                        ! looping varialbes
+
+   matrixif = 0.0_long
+   matrixir = 0.0_long
+
+   do i=0,N_sph-1
+   do j=0,N_sph-1
+      read(matrix_unit,*) matrixif(j,i)  
+   enddo
+   enddo
+
+   matrixif = matrixif 
+   matrixir = -1.0_long*matrixif 
+   end subroutine input_Yinvmatrix
+   !==============================================================
+
    !-------------------------------------------------------------------
    !****p field_io_mod/input_field
    ! SUBROUTINE

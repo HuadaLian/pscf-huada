@@ -74,7 +74,7 @@ program pscf
                              N_cell_param, cell_param, &
                              make_unit_cell, R_basis, G_basis
    use group_mod,     only : output_group
-   use grid_mod,      only : ngrid, lmax, N_sph,chain_step, &
+   use grid_mod,      only : ngrid, lbar, N_sph,Rjj, Yjf,Yjr,Yjfinv,Yjrinv,chain_step, &
                              input_grid, input_chainstep, output_chainstep, allocate_grid, make_ksq
    use basis_mod,     only : N_wave, N_star, group, &
                              make_basis, output_waves, release_basis
@@ -133,6 +133,12 @@ program pscf
                                       !   output_prefix//waves
    character(60)   :: input_filename  ! name of input field file
    character(60)   :: output_filename ! name of output field file
+
+   character(60)   :: input_Rmatrix_filename ! needed for wormlike chain solver
+   character(60)   :: input_Ymatrix_filename ! needed for wormlike chain solver
+   character(60)   :: input_Yinvmatrix_filename ! needed for wormlike chain solver
+
+
 
    !  Variable for field transformations
    integer                     :: i1, i2, i3, alpha
@@ -441,6 +447,14 @@ program pscf
          ! Read name of input omega file
          call input(input_filename, 'input_filename')  
 
+         ! Read name of input Rmatrix file 
+         call input(input_filename, 'input_Rmatrix_filename') 
+
+         ! Read name of input Ymatrix file 
+         call input(input_filename, 'input_Ymatrix_filename') 
+         ! Read name of input Ymatrix file 
+         call input(input_filename, 'input_Yinvmatrix_filename') 
+
          ! Read scale factor: vref -> vref/vref_scale
          call input(vref_scale, 'vref_scale')
 
@@ -449,6 +463,23 @@ program pscf
          if (ierr/=0) stop "Error while opening omega file"
          call input_field(omega, field_unit)
          close(field_unit)
+
+         ! Read Rmatrix, sharing the field_unit. 
+         open(unit=matrix_unit,file=trim(input_Rmatrix_filename),iostat=ierr)        
+         if (ierr/=0) stop "Error while opening Rmatrix file"
+         call input_Rmatrix(Rjj,matrix_unit)
+         close(matrix_unit)
+
+         ! Read Ymatrix, sharing the field_unit. 
+         open(unit=matrix_unit,file=trim(input_Ymatrix_filename),iostat=ierr)        
+         if (ierr/=0) stop "Error while opening Rmatrix file"
+         call input_Ymatrix(Yjf,Yjr,matrix_unit)
+         close(matrix_unit)
+         ! Read Yinvmatrix, sharing the field_unit. 
+         open(unit=matrix_unit,file=trim(input_Yinvmatrix_filename),iostat=ierr)        
+         if (ierr/=0) stop "Error while opening Rmatrix file"
+         call input_Yinvmatrix(Yjfinv,Yjrinv,matrix_unit)
+         close(matrix_unit)
 
          ! Rescale kuhn, chi, block_length, solvent_size
          ! See chemistry_mod
@@ -489,6 +520,33 @@ program pscf
             close(field_unit)
             omega_flag = .TRUE.
          end if
+
+         ! Read Rmatrix file, if not input preceding RESCALE command
+         if (.not.Rmatrix_flag) then
+            call input(input_Rmatrix_filename, 'input_Rmatrix_filename')  ! input  file prefix
+            open(unit=matrix_unit,file=trim(input_Rmatrix_filename),iostat=ierr)
+            if (ierr/=0) stop "Error while opening Rmatrix source file."
+            call input_Rmatrix(Rjj,matrix_unit)
+            close(matrix_unit)
+            Rmatrix_flag = .TRUE.
+         end if
+
+         ! Read Rmatrix file, if not input preceding RESCALE command
+         if (.not.Ymatrix_flag) then
+            call input(input_Ymatrix_filename, 'input_Ymatrix_filename')  ! input  file prefix
+            open(unit=matrix_unit,file=trim(input_Ymatrix_filename),iostat=ierr)
+            if (ierr/=0) stop "Error while opening Rmatrix source file."
+            call input_Ymatrix(Yjf,Yjr,matrix_unit)
+            close(matrix_unit)
+
+            call input(input_Yinvmatrix_filename, 'input_Yinvmatrix_filename')  ! input  file prefix
+            open(unit=matrix_unit,file=trim(input_Yinvmatrix_filename),iostat=ierr)
+            if (ierr/=0) stop "Error while opening Rmatrix source file."
+            call input_Yinvmatrix(Yjfinv,Yjrinv,matrix_unit)
+            close(matrix_unit)
+            Ymatrix_flag = .TRUE.
+         end if
+
 
          call input(output_prefix,'output_prefix') ! output file prefix
 
@@ -1028,6 +1086,18 @@ contains ! internal subroutines of program pscf
    if (i.ne.0) stop 'Error allocating rho'
    allocate(stress(N_cell_param), stat = i )
    if (i.ne.0) stop 'Error allocating stress'
+   ! Auxilliary matrix for wormlike chain solver
+   allocate(Rjj(1:3,0:N_sph-1,0:N_sph-1), stat = i)  ! # of spherical harmonics = (lbar+1)**2  
+   if (i.ne.0) stop 'Error allocating Rmatrix'
+
+   ALLOCATE(Yjf(0:N_sph-1,0:N_sph-1), STAT=i)
+   if (i /= 0) stop "Yj allocation error"
+   ALLOCATE(Yjr(0:N_sph-1,0:N_sph-1), STAT=i)
+   if (i /= 0) stop "Yj allocation error"
+   ALLOCATE(Yjfinv(0:N_sph-1,0:N_sph-1), STAT=i)
+   if (i /= 0) stop "Yjinv allocation error"
+   ALLOCATE(Yjrinv(0:N_sph-1,0:N_sph-1), STAT=i)
+   if (i /= 0) stop "Yjinv allocation error"
 
    !# ifdef DEVEL
    allocate(overlap(N_monomer,N_monomer),stat = i )

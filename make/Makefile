@@ -17,19 +17,19 @@ FORPEDO=$(REPO)/tools/python/preprocess-0.6.1/preprocess.py
 .PHONY: all clean install uninstall
 
 all:
-	make pscf
+	make pscf_back
 
 clean:
-	rm -f  *.o  *.mod  *.f  pscf
+	rm -f  *.o  *.mod  *.f  pscf_back
 
-pscf:	pscf.o\
+pscf_back:	pscf.o\
 	const_mod.o string_mod.o io_mod.o version_mod.o field_io_mod.o\
 	unit_cell_mod.o group_mod.o space_groups_mod.o basis_mod.o\
 	chemistry_mod.o scf_mod.o iterate_mod.o sweep_mod.o\
 	step_mod.o kronrod_mod.o grid_mod.o chain_mod.o $(FFT_FILE).o grid_basis_mod.o\
 	response_pd_mod.o spinodal_mod.o\
 	response_mod.o response_step_mod.o extrapolate_mod.o
-	$(F90) $(FOPENMP) $(LINK) -o pscf pscf.o \
+	$(F90) $(FOPENMP) $(LINK) -o pscf_back pscf.o \
 	const_mod.o string_mod.o io_mod.o version_mod.o field_io_mod.o \
 	unit_cell_mod.o group_mod.o space_groups_mod.o basis_mod.o \
 	chemistry_mod.o scf_mod.o iterate_mod.o sweep_mod.o \
@@ -91,7 +91,7 @@ kronrod_mod.o: $(SRC)/grid/kronrod_mod.f
 
 grid_mod.o: $(SRC)/grid/grid_mod.f const_mod.o\
 	group_mod.o unit_cell_mod.o kronrod_mod.o 
-	$(F90) $(FAST) $(SHTOOL) $(SHTOOLSLIB) $(FFTWLIB) $(LAPACKLIB) -c $(SRC)/grid/grid_mod.f
+	$(F90) $(FAST) -c $(SRC)/grid/grid_mod.f
 
 $(FFT_FILE).o: $(SRC)/grid/$(FFT_FILE).f const_mod.o
 	$(F90) $(FOPENMP) $(FAST) $(INCLUDES) $(FFTWLIB)  -c $(SRC)/grid/$(FFT_FILE).f
