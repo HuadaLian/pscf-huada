@@ -19,9 +19,7 @@
 module fft_mod
    use const_mod
    use omp_lib
-   use, intrinsic :: iso_c_binding 
    implicit none
-   include 'fftw3.f03' 
 
    PRIVATE 
    PUBLIC :: fft_plan
@@ -44,8 +42,8 @@ module fft_mod
 
    !***
    ! Parameters required by fftw3 supplied in fftw3.f
-   !integer, parameter :: FFTW_ESTIMATE=64
-   !integer, parameter :: FFTW_FORWARD=-1 ,FFTW_BACKWARD=1
+   integer, parameter :: FFTW_ESTIMATE=64
+   integer, parameter :: FFTW_FORWARD=-1 ,FFTW_BACKWARD=1
 
    !-------------------------------------------------------------------
    !****t fft_mod/fft_plan

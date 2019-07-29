@@ -94,9 +94,7 @@ program pscf
    use spinodal_mod
    !use group_rep_mod
    !# endif
-   use, intrinsic :: iso_c_binding
    implicit none 
-   include 'fftw3.f03'
     
    ! FFT variable
    type(fft_plan)  :: plan
