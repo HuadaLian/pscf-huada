@@ -573,14 +573,14 @@ contains
    real(long)             :: sin_theta(0:lmax)  
    integer                :: l,m !looping variables 
 
-   do l=0,lmax 
-      sin_theta(l) = sin((zero(l)+1.0)*acos(0.0_long))
-   enddo
+   !do l=0,lmax 
+   !   sin_theta(l) = sin(acos(zero(l)))
+   !enddo
 
    GL_integrate = 0.0_long 
 
    do m=0,2*lmax,1
-      GL_integrate = GL_integrate + sum(gridglq(:,m)*sin_theta*w)*acos(0.0_long)  
+      GL_integrate = GL_integrate + sum(gridglq(:,m)*w)  
    enddo 
 
    GL_integrate = GL_integrate * acos(0.0_long)*4.0/(2*lmax+1) 

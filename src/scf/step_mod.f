@@ -61,8 +61,6 @@ module step_mod
    complex(long), allocatable    :: uk(:,:,:,:,:)            ! (kx,ky,kz,theta,phi) 
    complex(long), allocatable    :: cos_isin_uk1(:,:,:,:,:)   ! (kx,ky,kz,theta,phi) 
    complex(long), allocatable    :: cos_isin_uk2(:,:,:,:,:)   ! (kx,ky,kz,theta,phi) 
-   complex(long), allocatable    :: cos_isin_ukr1(:,:,:,:,:)   ! (kx,ky,kz,theta,phi) 
-   complex(long), allocatable    :: cos_isin_ukr2(:,:,:,:,:)   ! (kx,ky,kz,theta,phi) 
 
    real(long)   , allocatable    :: exp_cilm(:,:,:) 
    real(long)   , allocatable    :: exp_dif1(:,:,:)             ! (l,m) 
@@ -162,10 +160,6 @@ contains
       if (error /= 0) stop "cos_isin_uk allocation error"
       ALLOCATE(cos_isin_uk2(0:n(1)/2,0:n(2)-1,0:n(3)-1,0:lmax,0:2*lmax), STAT=error)
       if (error /= 0) stop "cos_isin_uk allocation error"
-      ALLOCATE(cos_isin_ukr1(0:n(1)/2,0:n(2)-1,0:n(3)-1,0:lmax,0:2*lmax), STAT=error)
-      if (error /= 0) stop "cos_isin_uk allocation error"
-      ALLOCATE(cos_isin_ukr2(0:n(1)/2,0:n(2)-1,0:n(3)-1,0:lmax,0:2*lmax), STAT=error)
-      if (error /= 0) stop "cos_isin_uk allocation error"
 
       ALLOCATE(exp_dif1(1:2,0:lmax,0:2*lmax), STAT=error)
       if (error /= 0) stop "exp_dif1 allocation error"
@@ -203,7 +197,7 @@ contains
 
          do l= 0, lmax 
          do m= 0, 2*lmax 
-            theta =   acos(0.0_long)*(zero(lmax-l)+1.0_long) 
+            theta =   acos(zero(l))
             phi   = m*acos(0.0_long)*4.0_long / (2*lmax+1) 
             u     = (/sin(theta)*cos(phi),sin(theta)*sin(phi),cos(theta)/)
             uk(i,j,k,l,m) = dot_product( G_bz_wave,u)
@@ -249,11 +243,7 @@ contains
    ! Full step 
    qru = expw_omega1*qwf_in 
    call fft_many(plan_many, qru, qku) 
-   if (dir==-1) then 
-      qku = cos_isin_ukr1*qku
-   elseif (dir==1) then
    qku = cos_isin_uk1 *qku 
-   endif
    call ifft_many(plan_many, qku, qru) 
    qru = qru/r_npoints 
    do i=0,ngrid(1)-1 
@@ -266,11 +256,7 @@ contains
    enddo
    enddo
    call fft_many(plan_many, qru, qku) 
-   if (dir==-1) then 
-      qku = cos_isin_ukr1*qku
-   elseif (dir==1) then
    qku = cos_isin_uk1 *qku 
-   endif
    call ifft_many(plan_many, qku, qu1) 
    qu1 = qu1 / r_npoints 
    qu1 = expw_omega1*qu1 
@@ -278,12 +264,7 @@ contains
    ! Half step h/2 
    qru = expw_omega2*qwf_in  
    call fft_many(plan_many, qru, qku) 
-   if (dir==-1) then 
-      qku = cos_isin_ukr2*qku
-   elseif (dir==1) then
    qku = cos_isin_uk2 *qku 
-   endif
-
    call ifft_many(plan_many, qku, qru) 
    qru = qru / r_npoints 
    do i=0,ngrid(1)-1 
@@ -296,22 +277,14 @@ contains
    enddo
    enddo
    call fft_many(plan_many, qru, qku) 
-   if (dir==-1) then 
-      qku = cos_isin_ukr2*qku
-   elseif (dir==1) then
    qku = cos_isin_uk2 *qku 
-   endif
    call ifft_many(plan_many, qku, qru) 
    qru = qru / r_npoints 
    qru = expw_omega2*qru  
 
    qru = expw_omega2*qru  
    call fft_many(plan_many, qru, qku) 
-   if (dir==-1) then 
-      qku = cos_isin_ukr2*qku
-   elseif (dir==1) then
    qku = cos_isin_uk2 *qku 
-   endif
    call ifft_many(plan_many, qku, qru) 
    qru = qru / r_npoints 
    do i=0,ngrid(1)-1 
@@ -324,11 +297,7 @@ contains
    enddo
    enddo
    call fft_many(plan_many, qru, qku) 
-   if (dir==-1) then 
-      qku = cos_isin_ukr2*qku
-   elseif (dir==1) then
    qku = cos_isin_uk2 *qku 
-   endif
    call ifft_many(plan_many, qku, qu2) 
    qu2 = qu2 / r_npoints 
    qu2 = expw_omega2*qu2  
@@ -440,11 +409,9 @@ contains
       ! Advection term 
       adv_coeff   = ds / 2.0_long 
       cos_isin_uk1 = cos( adv_coeff * uk)+ cmplx(0.0_long,1.0_long) * sin( adv_coeff * uk)
-      cos_isin_ukr1 = cos(-adv_coeff * uk)+ cmplx(0.0_long,1.0_long) * sin(-adv_coeff * uk)
 
       adv_coeff   = (ds / 2.0_long) / 2.0_long  
       cos_isin_uk2 = cos( adv_coeff * uk)+ cmplx(0.0_long,1.0_long) * sin( adv_coeff * uk)
-      cos_isin_ukr2 = cos(-adv_coeff * uk)+ cmplx(0.0_long,1.0_long) * sin(-adv_coeff * uk)
 
       ! Diffusion term 
       dif_coeff   = ds/b  
